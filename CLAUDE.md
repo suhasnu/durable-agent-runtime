@@ -17,3 +17,9 @@ handle git, write CI config and docs.
 - Prose uses commas, not dashes, between words.
 - Comments only on non obvious decisions.
 - Tests run against a scripted provider, never the network.
+
+
+## Git
+
+After I approve a commit, push it. Never push without committing first,
+and never force push.
