@@ -21,7 +21,7 @@ class ScriptedProvider:
     def __init__(self, script: list[Completion | Exception], model: str = "scripted-1"):
         self.model = model
         self.script = list(script)
-        self.calls: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []
         self._index = 0
 
     def complete(
@@ -31,7 +31,7 @@ class ScriptedProvider:
         system: str | None = None,
         max_tokens: int = 2048,
     ) -> Completion:
-        self.calls.append({"messages": list(messages), "tools": tools, "system": system})
+        self.requests.append({"messages": list(messages), "tools": tools, "system": system})
         if self._index >= len(self.script):
             raise AssertionError(
                 f"scripted provider exhausted after {self._index} calls; the agent "
@@ -41,7 +41,8 @@ class ScriptedProvider:
         self._index += 1
         if isinstance(item, Exception):
             raise item
-        return item
+        # Copy rather than assign, so the script itself is never mutated.
+        return item.model_copy(update={"model": self.model})
 
 
 def says(text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> Completion:
@@ -60,6 +61,12 @@ def calls(
     input_tokens: int = 10,
     output_tokens: int = 5,
 ) -> Completion:
+    """Build a completion that makes one tool call.
+
+    Every call defaults to call_id="call_1". A script with more than one tool
+    calling turn must pass call_id explicitly to each, or tool results can be
+    matched to the wrong call.
+    """
     return Completion(
         message=Message(
             role="assistant",

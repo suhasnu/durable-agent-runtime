@@ -13,7 +13,19 @@ def test_responses_come_back_in_order():
 def test_requests_are_recorded():
     provider = ScriptedProvider([says("ok")])
     provider.complete([Message(role="user", content="hi")], system="be nice")
-    assert provider.calls[0]["system"] == "be nice"
+    assert provider.requests[0]["system"] == "be nice"
+
+
+def test_completions_carry_the_provider_model():
+    provider = ScriptedProvider([says("ok")], model="scripted-7")
+    assert provider.complete([]).model == "scripted-7"
+
+
+def test_stamping_the_model_leaves_the_script_untouched():
+    scripted = says("ok")
+    provider = ScriptedProvider([scripted], model="scripted-7")
+    provider.complete([])
+    assert scripted.model == ""
 
 
 def test_running_past_the_script_fails_loudly():
