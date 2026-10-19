@@ -63,3 +63,25 @@ effects included, then raises the step limit error without ever returning the
 results to the model. The work happened, but nothing downstream knows it did.
 
 This is the side effect problem that commits 13 and 14 address.
+
+## SSL certificate failures are classified as retryable
+
+`AnthropicProvider._post` maps every `urllib.error.URLError` to
+`RetryableError`. A failed certificate check arrives as a `URLError` wrapping
+`ssl.SSLCertVerificationError`, so it is retried even though no retry can fix
+it. Telling it apart from a real connection failure means inspecting
+`exc.reason`, which in practice comes down to string matching, so it was
+deferred.
+
+Fix when: a misconfigured environment wastes a run on pointless retries, or
+the error classification gets its own tests for `URLError` causes.
+
+## Retry moves from the provider to the runtime
+
+Decision: the provider classifies, the runtime retries. Today
+`AnthropicProvider._post_with_retry` retries internally, which means retries
+the runtime cannot see or record, and which would multiply with any retry the
+runtime adds on top.
+
+Fix when: commit 15. In the same commit, the provider's `max_attempts` is set
+to 1 so the two retry layers can never stack.
