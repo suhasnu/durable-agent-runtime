@@ -85,3 +85,23 @@ runtime adds on top.
 
 Fix when: commit 15. In the same commit, the provider's `max_attempts` is set
 to 1 so the two retry layers can never stack.
+
+## `apply_updates` copies the whole state on every step
+
+`apply_updates` deep copies each merged value and rebuilds the state through
+`model_validate`, so every step costs O(n) in the length of the message list.
+That is acceptable for now because checkpointing already serialises the whole
+state on every step, so the copy does not change the overall cost.
+
+Fix when: runs get long enough for per step copying to show up. The
+mitigation is structural sharing, for example immutable messages that new
+states can reference instead of copy.
+
+## The append reducer treats a tuple as a single item
+
+`_append` spreads an update only when it is a `list`. A tuple of messages is
+appended as one item instead of being spread, so it then fails validation, or
+worse, passes it.
+
+Fix when: a node returns a tuple, or the reducers get tests for update shapes.
+Spread any non string sequence, or reject tuples explicitly.
