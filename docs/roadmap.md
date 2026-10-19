@@ -136,3 +136,58 @@ or punctuation, produces a flowchart that will not render.
 Fix when: someone names a node that way, or the diagram is rendered somewhere
 automatically. Emit generated ids such as `n0`, `n1` and put the node name in
 the label.
+
+## Each checkpointer statement is its own transaction
+
+`SqliteCheckpointer` opens its connection with `isolation_level=None`, so every
+statement commits on its own. That is fine while each write is a single
+statement. Commit 13 needs a checkpoint write and a run status update to
+commit together or not at all, and today a crash between the two leaves them
+disagreeing.
+
+Fix when: commit 13. Add an explicit transaction helper, for example a context
+manager that issues `BEGIN` and then `COMMIT` or `ROLLBACK`, and route both
+writes through it.
+
+## `Checkpoint.step` and `state.step` can disagree
+
+The step number lives in two places: the `step` column on the checkpoint row,
+and the `step` field on the state it stores. They are maintained separately and
+nothing asserts they agree, so a resume could read one number from the row and
+another from the state.
+
+Fix when: the runtime starts writing checkpoints, since that is where the two
+are first set together. Either assert they match in `put_checkpoint`, or derive
+one from the other.
+
+## Checkpoints carry no schema version
+
+A checkpoint stores the state as JSON and is read back with whatever
+`state_type` the caller passes. Adding a required field to a state model makes
+every older checkpoint fail validation, so runs saved before the change can no
+longer be resumed or inspected.
+
+Fix when: a state model changes after real runs have been saved. Store a schema
+version on each checkpoint and migrate old rows on read, or give every new
+field a default.
+
+## One checkpointer connection is shared across threads unguarded
+
+`check_same_thread=False` lets one connection be used from several threads, but
+nothing serialises access to it. A reader such as a trace viewer should open its
+own connection rather than share the runtime's, which WAL mode already
+supports.
+
+Fix when: a second thread touches the checkpointer, for example a live trace
+viewer. Open a connection per reader, or guard the shared one with a lock.
+
+## The interrupt path must not write a checkpoint
+
+When a run is interrupted before a node, the checkpoint from the previous
+transition already records that node as `next_node`, so it is already the
+correct resume point. Writing another checkpoint on the interrupt would reuse
+that step number, and `put_checkpoint` now rejects a duplicate step with
+`IntegrityError`.
+
+Fix when: commit 17, when interrupts land. The interrupt path updates the run
+status only and leaves the checkpoints alone.

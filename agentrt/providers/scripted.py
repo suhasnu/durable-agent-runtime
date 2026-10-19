@@ -80,16 +80,21 @@ def calls(
 def calls_many(
     specs: list[tuple[str, dict[str, Any]]],
     *,
+    start: int = 1,
     input_tokens: int = 10,
     output_tokens: int = 5,
 ) -> Completion:
-    """Script a turn with several tool calls, as a model makes when the calls
-    are independent. Each gets its own id."""
+    """Script a turn with several tool calls.
+
+    Ids are numbered from `start`. A script with more than one tool-calling
+    turn must advance it, since a duplicate call_id becomes a real bug once
+    the write-ahead log keys on it.
+    """
     return Completion(
         message=Message(
             role="assistant",
             tool_calls=[
-                ToolCall(id=f"call_{i + 1}", name=name, arguments=args)
+                ToolCall(id=f"call_{start + i}", name=name, arguments=args)
                 for i, (name, args) in enumerate(specs)
             ],
         ),
