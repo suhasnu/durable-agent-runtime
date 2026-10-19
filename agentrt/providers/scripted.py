@@ -75,3 +75,24 @@ def calls(
         usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),
         stop_reason="tool_use",
     )
+    
+
+def calls_many(
+    specs: list[tuple[str, dict[str, Any]]],
+    *,
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+) -> Completion:
+    """Script a turn with several tool calls, as a model makes when the calls
+    are independent. Each gets its own id."""
+    return Completion(
+        message=Message(
+            role="assistant",
+            tool_calls=[
+                ToolCall(id=f"call_{i + 1}", name=name, arguments=args)
+                for i, (name, args) in enumerate(specs)
+            ],
+        ),
+        usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),
+        stop_reason="tool_use",
+    )
