@@ -105,3 +105,13 @@ worse, passes it.
 
 Fix when: a node returns a tuple, or the reducers get tests for update shapes.
 Spread any non string sequence, or reject tuples explicitly.
+
+## `to_mermaid` breaks on some node names
+
+`CompiledGraph.to_mermaid` uses each node name as its Mermaid id. A node named
+after a Mermaid reserved word, such as `end`, or one whose name contains spaces
+or punctuation, produces a flowchart that will not render.
+
+Fix when: someone names a node that way, or the diagram is rendered somewhere
+automatically. Emit generated ids such as `n0`, `n1` and put the node name in
+the label.
