@@ -5,9 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agentrt.loop import run_agent
+from agentrt.agent import build_agent
 from agentrt.providers import AnthropicProvider
+from agentrt.runtime import Runtime
+from agentrt.state import AgentState
 from agentrt.tools import ToolRegistry, tool
+from agentrt.types import Message
 
 
 @tool
@@ -18,17 +21,23 @@ def city_population(city: str) -> str:
 
 
 def main() -> None:
-    messages, usage = run_agent(
+    runtime = Runtime(
+        graph=build_agent().compile(),
         provider=AnthropicProvider(),
-        registry=ToolRegistry([city_population]),
-        user_message="How many more people live in Frankfurt than in Fulda?",
+        tools=ToolRegistry([city_population]),
         system="Use the tools available to you. Answer in one sentence.",
     )
+    result = runtime.run(
+        AgentState(messages=[
+            Message(role="user", content="How many more people live in Frankfurt than in Fulda?")
+        ])
+    )
 
-    for msg in messages:
+    for msg in result.state.messages:
         print(f"\n[{msg.role}] {msg.content or msg.tool_calls or msg.tool_results}")
 
-    print(f"\ntokens: {usage.input_tokens} in, {usage.output_tokens} out")
+    print(f"\nnodes: {' -> '.join(result.history)}")
+    print(f"tokens: {result.state.usage.input_tokens} in, {result.state.usage.output_tokens} out")
 
 
 if __name__ == "__main__":

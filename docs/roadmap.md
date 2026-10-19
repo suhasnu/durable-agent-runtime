@@ -35,34 +35,55 @@ Fix when: a second provider exists, or before CI is set up. Add mypy (or
 pyright) to dev dependencies and CI, plus a static assignment such as
 `_: Provider = ScriptedProvider([])` so the check has something to verify.
 
-## Agent loop never checks `stop_reason`
+## The agent graph never checks `stop_reason`
 
-`run_agent` treats any completion without tool calls as a finished answer. A
-completion that stopped because it hit the token limit is returned as if the
+`route_after_model` sends any completion without tool calls to `END`. A
+completion that stopped because it hit the token limit is treated as if the
 model chose to stop, so a truncated answer reads as a complete one. A
 truncation in the middle of a tool call can also leave its arguments
-incomplete.
+incomplete, and `tools_node` would then run the call with them.
 
-Fix when: the loop is replaced, or before any real provider is wired in. The
-loop should branch on `stop_reason` and treat `max_tokens` as its own outcome,
-not as success.
+Fix when: commit 15, since fixing it properly needs `max_tokens` plumbed
+through the provider call (next entry). The router should branch on
+`stop_reason` and treat `max_tokens` as its own outcome, not as success.
 
-## Agent loop never passes `max_tokens`
+## `model_node` never passes `max_tokens`
 
-`run_agent` calls `provider.complete` without `max_tokens`, so every run uses
-the provider default of 2048. Callers have no way to raise the limit for long
-answers or lower it to cap cost.
+`model_node` calls `ctx.provider.complete` without `max_tokens`, so every run
+uses the provider default of 2048. Callers have no way to raise the limit for
+long answers or lower it to cap cost.
 
-Fix when: alongside the `stop_reason` check, since the two interact. Expose
-`max_tokens` on `run_agent` and pass it through.
+Fix when: alongside the `stop_reason` check, since the two interact. Carry
+`max_tokens` on `Runtime` and `RunContext`, and have `model_node` pass it
+through.
 
 ## Tool results on the final step are discarded
 
-If the last allowed completion requests tools, the loop executes them, side
-effects included, then raises the step limit error without ever returning the
-results to the model. The work happened, but nothing downstream knows it did.
+If the step budget runs out right after `tools_node`, the tools have already
+executed, side effects included, but the runtime raises the step limit error
+before `model_node` runs again. The results never reach the model. The work
+happened, but nothing downstream knows it did.
 
 This is the side effect problem that commits 13 and 14 address.
+
+## Hitting `max_steps` discards the run
+
+When the budget runs out, `Runtime.run` raises `RuntimeError` instead of
+returning a `RunResult`. The state built up so far is lost with it: messages,
+tool results and the token count, so a caller cannot even report what the
+failed run cost.
+
+Fix when: commit 16, when budgets return a status on the `RunResult` instead
+of raising.
+
+## `max_steps` counts node executions, not model turns
+
+The old loop counted one step per model turn. `Runtime` counts every node it
+runs, and one tool calling round is `model` then `tools`, so the same
+`max_steps` allows about half as many model calls as before.
+
+Fix when: a run hits the limit sooner than its author expected, or budgets
+move to commit 16 and can count model turns, tokens or nodes separately.
 
 ## SSL certificate failures are classified as retryable
 
