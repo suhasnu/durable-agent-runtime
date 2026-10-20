@@ -1,14 +1,15 @@
 import pytest
 from pydantic import BaseModel
 
-from agentrt.checkpoint import InMemoryCheckpointer
+from agentrt.agent import build_agent
+from agentrt.checkpoint import InMemoryCheckpointer, SqliteCheckpointer
 from agentrt.errors import UncertainSideEffect
 from agentrt.graph import END, StateGraph
-from agentrt.providers import ScriptedProvider
+from agentrt.providers import ScriptedProvider, calls, says
 from agentrt.runtime import Runtime
 from agentrt.state import AgentState, Messages
+from agentrt.tools import ToolRegistry, tool
 from agentrt.types import Message
-from agentrt.providers import calls, says
 
 
 def test_a_state_type_without_a_step_field_still_runs():
@@ -60,10 +61,6 @@ def test_nodes_receive_the_context_they_were_given():
     
 
 def test_every_step_is_checkpointed():
-    from agentrt.agent import build_agent
-    from agentrt.checkpoint import InMemoryCheckpointer
-    from agentrt.providers import calls, says
-    from agentrt.tools import ToolRegistry, tool
 
     @tool
     def ping() -> str:
@@ -161,9 +158,6 @@ def test_a_raising_router_still_leaves_the_run_in_a_terminal_status():
 
 
 def test_resume_continues_from_the_last_checkpoint():
-    from agentrt.agent import build_agent
-    from agentrt.providers import calls, says
-    from agentrt.tools import ToolRegistry, tool
 
     @tool
     def ping() -> str:
@@ -247,10 +241,6 @@ def test_resuming_an_unknown_run_is_an_error():
 def test_a_run_survives_a_new_process(tmp_path):
     """The whole claim, in one test: a run resumed from a different Runtime,
     a different provider and a reopened database reaches the same place."""
-    from agentrt.agent import build_agent
-    from agentrt.checkpoint import SqliteCheckpointer
-    from agentrt.providers import calls, says
-    from agentrt.tools import ToolRegistry, tool
 
     @tool
     def ping() -> str:
@@ -298,9 +288,6 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
     crash in between leaves the last checkpoint pointing at tools_node, so
     resume runs it again and the side effect happens twice.
     """
-    from agentrt.agent import build_agent
-    from agentrt.providers import says
-    from agentrt.tools import ToolRegistry, tool
 
     charges: list[float] = []
     crash = {"armed": True}
@@ -341,5 +328,81 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
     assert "may have executed" in str(resumed.error)
     assert charges == [49.0], "the card must be charged exactly once"
     
+class CrashOnStep(InMemoryCheckpointer):
+    """Dies when writing one particular checkpoint.
+
+    The window between a tool completing and its checkpoint landing cannot be
+    reached from the tool itself, so the store is where the crash goes.
+    """
+
+    def __init__(self, step: int):
+        super().__init__()
+        self._crash_at = step
+
+    def put_checkpoint(self, cp):
+        if cp.step == self._crash_at:
+            self._crash_at = None
+            raise ProcessKilled
+        super().put_checkpoint(cp)
+
+
 def test_a_completed_invocation_is_replayed_not_re_executed():
-    """Resume never repeats work it already paid for, side effects or not."""
+    """Resume never repeats work it already paid for."""
+
+    ran: list[str] = []
+
+    @tool
+    def lookup(key: str) -> str:
+        """Look something up."""
+        ran.append(key)
+        return f"value of {key}"
+
+    cp = CrashOnStep(step=2)
+    registry = ToolRegistry([lookup])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("lookup", {"key": "x"})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    assert ran == ["x"]
+    assert cp.get_invocation("r1", "call_1").status == "completed"
+
+    resumed = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("the answer is value of x")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    assert resumed.status == "completed"
+    assert ran == ["x"], "the tool must not run a second time"
+    tool_message = next(m for m in resumed.state.messages if m.role == "tool")
+    assert tool_message.tool_results[0].content == "value of x", "the logged result reached the model"
+    
+def test_a_reused_call_id_with_different_arguments_is_refused():
+    """Replaying by call id alone would silently answer the wrong question."""
+
+    @tool
+    def lookup(key: str) -> str:
+        """Look something up."""
+        return f"value of {key}"
+
+    cp = InMemoryCheckpointer()
+    result = Runtime(
+        graph=build_agent().compile(),
+        provider=ScriptedProvider([
+            calls("lookup", {"key": "a"}, call_id="call_1"),
+            calls("lookup", {"key": "b"}, call_id="call_1"),
+            says("done"),
+        ]),
+        tools=ToolRegistry([lookup]),
+        checkpointer=cp,
+    ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    assert result.status == "failed"
+    assert "different arguments" in str(result.error)

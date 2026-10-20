@@ -20,6 +20,8 @@ from .providers.base import Provider
 from .state import apply_updates
 from .tools import InvalidToolArguments, ToolNotFound, ToolRegistry
 from .types import Message, ToolCall, ToolResult, new_id
+from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
+from .errors import FatalError, UncertainSideEffect
 
 
 @dataclass
@@ -197,6 +199,13 @@ def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResul
         prior = ctx.checkpointer.get_invocation(ctx.run_id, call.id)
 
         if prior is not None and prior.status == "completed" and prior.result is not None:
+            if prior.args_hash != hash_args(call.name, call.arguments):
+                # Same call id, different arguments. Replaying the stored result
+                # would answer a question nobody asked, silently.
+                raise FatalError(
+                    f"call id {call.id!r} was already used for {prior.tool_name!r} with "
+                    f"different arguments; its logged result does not belong to this call"
+                )
             results.append(
                 ToolResult(
                     call_id=call.id,

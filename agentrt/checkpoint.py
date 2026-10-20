@@ -227,6 +227,14 @@ class SqliteCheckpointer:
         self, run_id: str, call_id: str, result: str, is_error: bool = False
     ) -> None:
         """Operator override: assert what a dangling invocation actually did."""
+        record = self.get_invocation(run_id, call_id)
+        if record is None:
+            raise KeyError(f"no invocation {call_id!r} for run {run_id!r}")
+        if record.status != "started":
+            raise ValueError(
+                f"invocation {call_id!r} is already {record.status!r}; "
+                f"only a dangling invocation can be resolved"
+            )
         self.complete_invocation(run_id, call_id, result, is_error)
         
 def _to_invocation(row: sqlite3.Row) -> InvocationRecord:
