@@ -2,11 +2,13 @@ import pytest
 from pydantic import BaseModel
 
 from agentrt.checkpoint import InMemoryCheckpointer
+from agentrt.errors import UncertainSideEffect
 from agentrt.graph import END, StateGraph
 from agentrt.providers import ScriptedProvider
 from agentrt.runtime import Runtime
 from agentrt.state import AgentState, Messages
 from agentrt.types import Message
+from agentrt.providers import calls, says
 
 
 def test_a_state_type_without_a_step_field_still_runs():
@@ -289,7 +291,6 @@ class ProcessKilled(BaseException):
     """
 
 
-@pytest.mark.xfail(strict=True, reason="no write-ahead log yet: commit 13")
 def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
     """The failure the whole project is named for.
 
@@ -298,7 +299,7 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
     resume runs it again and the side effect happens twice.
     """
     from agentrt.agent import build_agent
-    from agentrt.providers import calls, says
+    from agentrt.providers import says
     from agentrt.tools import ToolRegistry, tool
 
     charges: list[float] = []
@@ -327,11 +328,18 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
 
     assert charges == [49.0], "the charge happened before the crash"
 
-    Runtime(
+    
+    resumed = Runtime(
         graph=graph,
         provider=ScriptedProvider([says("done")]),
         tools=registry,
         checkpointer=cp,
     ).resume("r1")
 
+    assert resumed.status == "failed"
+    assert isinstance(resumed.error, UncertainSideEffect)
+    assert "may have executed" in str(resumed.error)
     assert charges == [49.0], "the card must be charged exactly once"
+    
+def test_a_completed_invocation_is_replayed_not_re_executed():
+    """Resume never repeats work it already paid for, side effects or not."""

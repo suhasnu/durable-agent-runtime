@@ -9,10 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from .graph import END, StateGraph
-from .runtime import RunContext
+from .runtime import RunContext, execute_tool_calls
 from .state import AgentState
-from .tools import InvalidToolArguments, ToolNotFound
-from .types import Message, ToolResult
+from .types import Message
 
 
 def model_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:
@@ -28,20 +27,7 @@ def tools_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:
     last = state.messages[-1]
     if not last.tool_calls:
         return {}
-
-    results = []
-    for call in last.tool_calls:
-        try:
-            content = ctx.tools.get(call.name).call(call.arguments)
-            is_error = False
-        except (ToolNotFound, InvalidToolArguments) as exc:
-            content, is_error = str(exc), True
-        except Exception as exc:  # noqa: BLE001 - tool authors raise anything
-            content, is_error = f"{type(exc).__name__}: {exc}", True
-        results.append(
-            ToolResult(call_id=call.id, name=call.name, content=content, is_error=is_error)
-        )
-
+    results = execute_tool_calls(ctx, last.tool_calls)
     return {"messages": Message(role="tool", tool_results=results)}
 
 

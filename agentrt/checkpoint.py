@@ -7,6 +7,7 @@ just a crash recovery mechanism.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -34,8 +35,36 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     PRIMARY KEY (run_id, step),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    run_id       TEXT NOT NULL,
+    call_id      TEXT NOT NULL,
+    tool_name    TEXT NOT NULL,
+    args_hash    TEXT NOT NULL,
+    args         TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    result       TEXT,
+    is_error     INTEGER NOT NULL DEFAULT 0,
+    started_at   REAL NOT NULL,
+    completed_at REAL,
+    PRIMARY KEY (run_id, call_id),
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
 """
 
+@dataclass
+class InvocationRecord:
+    call_id: str
+    tool_name: str
+    args_hash: str
+    status: str
+    result: str | None
+    is_error: bool
+
+
+def hash_args(name: str, args: dict[str, Any]) -> str:
+    payload = json.dumps({"tool": name, "args": args}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 @dataclass
 class Checkpoint:
@@ -147,6 +176,68 @@ class SqliteCheckpointer:
             next_node=row["next_node"],
             state=state_type.model_validate_json(row["state"]),
         )
+    
+    def begin_invocation(
+        self, run_id: str, call_id: str, tool_name: str, args: dict[str, Any]
+    ) -> None:
+        """Record intent to call a tool. Must commit before the tool executes.
+
+        Writing this after the call would leave no trace of one that died
+        mid-flight, which is exactly the call a resume needs to know about.
+        """
+        self._conn.execute(
+            "INSERT INTO tool_invocations "
+            "(run_id, call_id, tool_name, args_hash, args, status, started_at) "
+            "VALUES (?,?,?,?,?,'started',?)",
+            (
+                run_id,
+                call_id,
+                tool_name,
+                hash_args(tool_name, args),
+                json.dumps(args, default=str),
+                time.time(),
+            ),
+        )
+
+    def complete_invocation(
+        self, run_id: str, call_id: str, result: str, is_error: bool = False
+    ) -> None:
+        self._conn.execute(
+            "UPDATE tool_invocations SET status='completed', result=?, is_error=?, "
+            "completed_at=? WHERE run_id=? AND call_id=?",
+            (result, int(is_error), time.time(), run_id, call_id),
+        )
+
+    def get_invocation(self, run_id: str, call_id: str) -> InvocationRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM tool_invocations WHERE run_id=? AND call_id=?", (run_id, call_id)
+        ).fetchone()
+        return _to_invocation(row) if row else None
+
+    def dangling_invocations(self, run_id: str) -> list[InvocationRecord]:
+        """Started but never completed. Each one is an unknown side effect."""
+        return [
+            _to_invocation(r)
+            for r in self._conn.execute(
+                "SELECT * FROM tool_invocations WHERE run_id=? AND status='started'", (run_id,)
+            )
+        ]
+
+    def resolve_invocation(
+        self, run_id: str, call_id: str, result: str, is_error: bool = False
+    ) -> None:
+        """Operator override: assert what a dangling invocation actually did."""
+        self.complete_invocation(run_id, call_id, result, is_error)
+        
+def _to_invocation(row: sqlite3.Row) -> InvocationRecord:
+    return InvocationRecord(
+        call_id=row["call_id"],
+        tool_name=row["tool_name"],
+        args_hash=row["args_hash"],
+        status=row["status"],
+        result=row["result"],
+        is_error=bool(row["is_error"]),
+    )
 
 
 class InMemoryCheckpointer(SqliteCheckpointer):

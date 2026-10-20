@@ -10,7 +10,11 @@ a side effect.
 reducers, a validated state graph, and a SQLite checkpoint store. The agent runs
 as a two node graph on the runtime, which writes a checkpoint after every
 transition and can resume a run from its last checkpoint, in a new process.
-Side effects are not yet protected: a resumed run can repeat a tool call.
+Every tool call goes through a write-ahead log. On resume, a completed call is
+replayed from the log, never executed again, and a call that started but never
+finished makes the runtime refuse with `UncertainSideEffect` rather than guess.
+Commit 14 adds the cases that can be decided automatically, such as tools
+marked idempotent.
 See [docs/why-a-graph.md](docs/why-a-graph.md).
 
 No LangGraph, no CrewAI. Dependencies: pydantic, and SQLite from the standard library.

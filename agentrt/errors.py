@@ -21,3 +21,19 @@ class RetryableError(AgentError):
 
 class FatalError(AgentError):
     """Permanent. Retrying the same call cannot help."""
+    
+class UncertainSideEffect(AgentError):
+    """A side-effecting tool started but its outcome was never recorded.
+
+    The write-ahead log holds a `started` record with no matching `completed`
+    record. The runtime cannot know whether the effect happened, so it refuses
+    to guess. See docs/durability.md.
+    """
+
+    def __init__(self, tool_name: str, call_id: str):
+        super().__init__(
+            f"tool {tool_name!r} (call {call_id}) may have executed before the crash; "
+            f"outcome unknown. Mark the tool idempotent, or resolve this run manually."
+        )
+        self.tool_name = tool_name
+        self.call_id = call_id

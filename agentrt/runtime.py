@@ -14,11 +14,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer
+from .errors import UncertainSideEffect
 from .graph import END, CompiledGraph
 from .providers.base import Provider
 from .state import apply_updates
-from .tools import ToolRegistry
-from .types import Message, new_id
+from .tools import InvalidToolArguments, ToolNotFound, ToolRegistry
+from .types import Message, ToolCall, ToolResult, new_id
 
 
 @dataclass
@@ -27,6 +28,8 @@ class RunContext:
 
     provider: Provider
     tools: ToolRegistry
+    run_id: str
+    checkpointer: SqliteCheckpointer
     system: str | None = None
     step: int = 0
 
@@ -110,7 +113,13 @@ class Runtime:
 
     def _drive(self, run_id: str, state: BaseModel, node: str, step: int) -> RunResult:
         history: list[str] = []
-        ctx = RunContext(provider=self.provider, tools=self.tools, system=self.system)
+        ctx = RunContext(
+            provider=self.provider,
+            tools=self.tools,
+            run_id=run_id,
+            checkpointer=self.checkpointer,
+            system=self.system,
+        )
 
         while node != END:
             if step >= self.max_steps:
@@ -168,3 +177,62 @@ class Runtime:
         return RunResult(
             run_id=run_id, status=status, state=state, steps=step, error=error, history=history
         )
+        
+def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResult]:
+    """Run tool calls with write-ahead logging.
+
+    The ordering is the point:
+
+      1. look up a prior completed record   -> makes resume idempotent for free
+      2. write `started` and COMMIT         -> survives a crash in step 3
+      3. execute the tool                   -> the dangerous part
+      4. write `completed` and COMMIT       -> closes the window
+
+    Doing 2 after 3 is the obvious implementation and it is wrong: the crash
+    window it leaves is exactly the window where the effect happens.
+    """
+    results: list[ToolResult] = []
+
+    for call in calls:
+        prior = ctx.checkpointer.get_invocation(ctx.run_id, call.id)
+
+        if prior is not None and prior.status == "completed" and prior.result is not None:
+            results.append(
+                ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    content=prior.result,
+                    is_error=prior.is_error,
+                )
+            )
+            continue
+
+        if prior is not None:
+            # A `started` record with no `completed` record. Undecidable:
+            # commit 14 adds the cases that can be decided.
+            raise UncertainSideEffect(prior.tool_name, prior.call_id)
+
+        try:
+            tool = ctx.tools.get(call.name)
+        except ToolNotFound as exc:
+            results.append(
+                ToolResult(call_id=call.id, name=call.name, content=str(exc), is_error=True)
+            )
+            continue
+
+        ctx.checkpointer.begin_invocation(ctx.run_id, call.id, call.name, call.arguments)
+
+        try:
+            content = tool.call(call.arguments)
+            is_error = False
+        except InvalidToolArguments as exc:
+            content, is_error = str(exc), True
+        except Exception as exc:  # noqa: BLE001 - tool authors raise anything
+            content, is_error = f"{type(exc).__name__}: {exc}", True
+
+        ctx.checkpointer.complete_invocation(ctx.run_id, call.id, content, is_error)
+        results.append(
+            ToolResult(call_id=call.id, name=call.name, content=content, is_error=is_error)
+        )
+
+    return results
