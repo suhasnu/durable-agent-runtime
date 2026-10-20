@@ -24,3 +24,8 @@ next. That is the only change in commits 7 to 9. Everything this runtime
 claims afterwards, resuming a killed run, pausing for a human, replaying a
 trace, forking a run at step twenty, is a consequence of that one change
 rather than a feature added on top.
+
+As of commit 12 this is no longer a promise: a run killed mid-step resumes in
+a different process, from a reopened database, with its conversation intact.
+What it does not yet solve is side effects. Resuming is exactly what makes a
+tool run twice, and that is a different problem, addressed in commits 13 and 14.

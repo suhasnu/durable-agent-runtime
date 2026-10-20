@@ -1,3 +1,4 @@
+import pytest
 from pydantic import BaseModel
 
 from agentrt.checkpoint import InMemoryCheckpointer
@@ -155,3 +156,126 @@ def test_a_raising_router_still_leaves_the_run_in_a_terminal_status():
     assert result.status == "failed"
     assert isinstance(result.error, ValueError)
     assert cp.run_status("r1") == "failed", "a run must never be left marked running"
+
+
+def test_resume_continues_from_the_last_checkpoint():
+    from agentrt.agent import build_agent
+    from agentrt.providers import calls, says
+    from agentrt.tools import ToolRegistry, tool
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([ping])
+    graph = build_agent().compile()
+
+    # Die after the first model call: the script runs out, which raises.
+    first = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([calls("ping", {})]),
+        tools=registry,
+        checkpointer=cp,
+    )
+    crashed = first.run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+    assert crashed.status == "failed"
+
+    # A fresh Runtime, nothing carried over in memory.
+    second = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("done")]),
+        tools=registry,
+        checkpointer=cp,
+    )
+    result = second.resume("r1")
+
+    assert result.status == "completed"
+    assert result.last_message.content == "done"
+    assert cp.run_status("r1") == "completed"
+
+
+def test_resume_takes_the_step_from_the_checkpoint_not_from_memory():
+    cp = InMemoryCheckpointer()
+    g = StateGraph(AgentState)
+    g.add_node("a", lambda state, ctx: {})
+    g.add_node("b", lambda state, ctx: {})
+    g.set_entry("a")
+    g.add_edge("a", "b")
+    g.add_edge("b", END)
+
+    rt = Runtime(graph=g.compile(), provider=ScriptedProvider([]), checkpointer=cp)
+    rt.run(run_id="r1")
+
+    # The run finished at step 2. Resuming writes no new checkpoints, because
+    # the last one already points at END.
+    resumed = rt.resume("r1")
+    assert resumed.steps == 2
+    assert [h["step"] for h in cp.history("r1")] == [0, 1, 2]
+
+
+def test_resuming_a_finished_run_is_a_no_op():
+    cp = InMemoryCheckpointer()
+    g = StateGraph(AgentState)
+    g.add_node("once", lambda state, ctx: {"messages": Message(role="assistant", content="hi")})
+    g.set_entry("once")
+    g.add_edge("once", END)
+
+    rt = Runtime(graph=g.compile(), provider=ScriptedProvider([]), checkpointer=cp)
+    rt.run(run_id="r1")
+    resumed = rt.resume("r1")
+
+    assert resumed.status == "completed"
+    assert len(resumed.state.messages) == 1, "the node must not run a second time"
+    assert resumed.history == []
+
+
+def test_resuming_an_unknown_run_is_an_error():
+    g = StateGraph(AgentState)
+    g.add_node("once", lambda state, ctx: {})
+    g.set_entry("once")
+    g.add_edge("once", END)
+
+    rt = Runtime(graph=g.compile(), provider=ScriptedProvider([]))
+    with pytest.raises(KeyError, match="no checkpoint"):
+        rt.resume("ghost")
+
+
+def test_a_run_survives_a_new_process(tmp_path):
+    """The whole claim, in one test: a run resumed from a different Runtime,
+    a different provider and a reopened database reaches the same place."""
+    from agentrt.agent import build_agent
+    from agentrt.checkpoint import SqliteCheckpointer
+    from agentrt.providers import calls, says
+    from agentrt.tools import ToolRegistry, tool
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    db = tmp_path / "run.db"
+    graph = build_agent().compile()
+    registry = ToolRegistry([ping])
+
+    store = SqliteCheckpointer(db)
+    Runtime(
+        graph=graph,
+        provider=ScriptedProvider([calls("ping", {})]),
+        tools=registry,
+        checkpointer=store,
+    ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+    store.close()
+
+    reopened = SqliteCheckpointer(db)
+    result = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("finished in another process")]),
+        tools=registry,
+        checkpointer=reopened,
+    ).resume("r1")
+
+    assert result.status == "completed"
+    assert result.last_message.content == "finished in another process"
+    assert result.state.messages[0].content == "go", "the original question survived"

@@ -83,6 +83,20 @@ class Runtime:
             Checkpoint(run_id=run_id, step=0, next_node=self.graph.entry, state=state)
         )
         return self._drive(run_id, state, self.graph.entry, step=0)
+    
+    def resume(self, run_id: str) -> RunResult:
+        """Continue a run from its last checkpoint.
+
+        Everything comes from the checkpoint row: the state, the step, and the
+        node to run next. Nothing is taken from this Runtime object, which is
+        what lets a fresh process pick up a run the previous one died in.
+        """
+        checkpoint = self.checkpointer.latest_checkpoint(run_id, self.graph.state_type)
+        if checkpoint is None:
+            raise KeyError(f"no checkpoint for run {run_id!r}")
+
+        self.checkpointer.set_run_status(run_id, "running")
+        return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
 
     def _drive(self, run_id: str, state: BaseModel, node: str, step: int) -> RunResult:
         history: list[str] = []
