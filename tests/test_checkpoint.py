@@ -67,7 +67,7 @@ def test_history_is_ordered_by_step():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")
     for step in [3, 0, 2, 1]:
-        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state()))
+        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state(step=step)))
 
     assert [h["step"] for h in cp.history("r1")] == [0, 1, 2, 3]
 
@@ -97,10 +97,10 @@ def test_survives_a_real_file(tmp_path):
 def test_writing_the_same_step_twice_is_rejected():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")
-    cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="model", state=state("first")))
+    cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="model", state=state("first", 5)))
 
     with pytest.raises(sqlite3.IntegrityError):
-        cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="tools", state=state("second")))
+        cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="tools", state=state("second", 5)))
 
     assert cp.checkpoint_at("r1", 5, AgentState).state.messages[0].content == "first"
 

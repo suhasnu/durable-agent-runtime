@@ -95,6 +95,16 @@ class Runtime:
         if checkpoint is None:
             raise KeyError(f"no checkpoint for run {run_id!r}")
 
+        if checkpoint.next_node == END:
+            # Already finished. Flipping the status to running and back would
+            # make a finished run briefly look like one being driven.
+            return RunResult(
+                run_id=run_id,
+                status="completed",
+                state=checkpoint.state,
+                steps=checkpoint.step,
+            )
+
         self.checkpointer.set_run_status(run_id, "running")
         return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
 

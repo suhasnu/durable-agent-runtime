@@ -279,3 +279,59 @@ def test_a_run_survives_a_new_process(tmp_path):
     assert result.status == "completed"
     assert result.last_message.content == "finished in another process"
     assert result.state.messages[0].content == "go", "the original question survived"
+    
+
+class ProcessKilled(BaseException):
+    """Not an Exception, so nothing in the runtime catches it.
+
+    This is how SIGKILL looks from the executor's point of view: control
+    leaves mid-tool and no completion record is ever written.
+    """
+
+
+@pytest.mark.xfail(strict=True, reason="no write-ahead log yet: commit 13")
+def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
+    """The failure the whole project is named for.
+
+    tools_node executes the tool, then the runtime writes the checkpoint. A
+    crash in between leaves the last checkpoint pointing at tools_node, so
+    resume runs it again and the side effect happens twice.
+    """
+    from agentrt.agent import build_agent
+    from agentrt.providers import calls, says
+    from agentrt.tools import ToolRegistry, tool
+
+    charges: list[float] = []
+    crash = {"armed": True}
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        charges.append(amount)
+        if crash["armed"]:
+            crash["armed"] = False
+            raise ProcessKilled
+        return f"charged {amount}"
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([charge_card])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("charge_card", {"amount": 49.0})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="charge 49")]), run_id="r1")
+
+    assert charges == [49.0], "the charge happened before the crash"
+
+    Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("done")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    assert charges == [49.0], "the card must be charged exactly once"

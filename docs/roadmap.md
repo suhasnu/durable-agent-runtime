@@ -139,17 +139,28 @@ Fix when: commit 13. Add an explicit transaction helper, for example a context
 manager that issues `BEGIN` and then `COMMIT` or `ROLLBACK`, and route both
 writes through it.
 
-## `Checkpoint.step` and `state.step` can disagree
+## Two processes can drive the same run
 
-The step number lives in two places: the `step` column on the checkpoint row,
-and the `step` field on the state it stores. `Runtime` now sets both from the
-same counter, so they agree for every checkpoint it writes. Nothing asserts it,
-though: any other caller of `put_checkpoint` can write a row whose two numbers
-differ, and a resume could then read one from the row and another from the
-state.
+`resume` does not check the run's status, so it will resume a run that another
+process is still driving. Both execute the same node, the slower one hits
+`IntegrityError` on the duplicate step, and its `_finish` then overwrites the
+winner's `completed` with `failed`. The node's side effects also happen twice.
 
-Fix when: resume lands, since that is the first code that reads the step back.
-Assert they match in `put_checkpoint` when the state declares a `step` field.
+Fix when: phase 6. Take a lease on the run with a compare and set,
+`UPDATE runs SET status='running' ... WHERE run_id=? AND status != 'running'`,
+and refuse to resume when no row changes. That alone would strand a run whose
+driver was killed, since it stays `running` forever, so the same change needs a
+way to recover it, for example a lease that expires or an explicit force.
+
+## A run that exhausted its budget cannot be resumed
+
+`max_steps` is compared against the absolute step from the checkpoint. A run
+that failed at its step limit fails again immediately on resume, even from a
+fresh `Runtime`, and there is no way to give it more budget.
+
+Fix when: commit 16, alongside the other budget changes. Either make budgets
+per attempt, counted from the step a resume starts at, or accept
+`resume(run_id, max_steps=...)`.
 
 ## Checkpoints carry no schema version
 

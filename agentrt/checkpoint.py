@@ -103,6 +103,12 @@ class SqliteCheckpointer:
         is what checkpoint_at() exists to prevent. The primary key rejects it
         instead, so the bug surfaces where it happens.
         """
+        state_step = getattr(cp.state, "step", None)
+        if state_step is not None and state_step != cp.step:
+            raise ValueError(
+                f"checkpoint step {cp.step} disagrees with state.step {state_step}; "
+                f"a resume would read two different numbers for the same moment"
+            )
         self._conn.execute(
             "INSERT INTO checkpoints (run_id, step, next_node, state, created_at) "
             "VALUES (?,?,?,?,?)",
