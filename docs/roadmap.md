@@ -66,16 +66,6 @@ happened, but nothing downstream knows it did.
 
 This is the side effect problem that commits 13 and 14 address.
 
-## Hitting `max_steps` discards the run
-
-When the budget runs out, `Runtime.run` raises `RuntimeError` instead of
-returning a `RunResult`. The state built up so far is lost with it: messages,
-tool results and the token count, so a caller cannot even report what the
-failed run cost.
-
-Fix when: commit 16, when budgets return a status on the `RunResult` instead
-of raising.
-
 ## `max_steps` counts node executions, not model turns
 
 The old loop counted one step per model turn. `Runtime` counts every node it
@@ -152,13 +142,14 @@ writes through it.
 ## `Checkpoint.step` and `state.step` can disagree
 
 The step number lives in two places: the `step` column on the checkpoint row,
-and the `step` field on the state it stores. They are maintained separately and
-nothing asserts they agree, so a resume could read one number from the row and
-another from the state.
+and the `step` field on the state it stores. `Runtime` now sets both from the
+same counter, so they agree for every checkpoint it writes. Nothing asserts it,
+though: any other caller of `put_checkpoint` can write a row whose two numbers
+differ, and a resume could then read one from the row and another from the
+state.
 
-Fix when: the runtime starts writing checkpoints, since that is where the two
-are first set together. Either assert they match in `put_checkpoint`, or derive
-one from the other.
+Fix when: resume lands, since that is the first code that reads the step back.
+Assert they match in `put_checkpoint` when the state declares a `step` field.
 
 ## Checkpoints carry no schema version
 

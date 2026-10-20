@@ -8,10 +8,9 @@ time rather than forty steps into a run that has already cost money.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Callable, Iterable
 
 from pydantic import BaseModel
 

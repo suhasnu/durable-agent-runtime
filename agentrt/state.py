@@ -13,10 +13,10 @@ nodes both contribute to `messages` without one clobbering the other.
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Annotated, Any, get_args, get_origin
 
 from pydantic import BaseModel, Field
-from copy import deepcopy
 
 from .types import Message, Usage
 

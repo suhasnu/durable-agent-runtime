@@ -7,7 +7,6 @@ another, and what keeps the rest of the runtime from knowing any vendor's JSON.
 
 from __future__ import annotations
 
-import time
 import uuid
 from typing import Any, Literal
 

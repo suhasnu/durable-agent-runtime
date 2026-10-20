@@ -1,8 +1,10 @@
+import sqlite3
+
+import pytest
+
 from agentrt.checkpoint import Checkpoint, InMemoryCheckpointer
 from agentrt.state import AgentState
 from agentrt.types import Message, Usage
-import pytest
-import sqlite3
 
 
 def state(text: str = "hi", step: int = 0) -> AgentState:

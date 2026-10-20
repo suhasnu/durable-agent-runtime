@@ -32,6 +32,8 @@ def main() -> None:
             Message(role="user", content="How many more people live in Frankfurt than in Fulda?")
         ])
     )
+    if result.status != "completed":
+        print(f"\nrun failed after {result.steps} steps: {result.error}")
 
     for msg in result.state.messages:
         print(f"\n[{msg.role}] {msg.content or msg.tool_calls or msg.tool_results}")

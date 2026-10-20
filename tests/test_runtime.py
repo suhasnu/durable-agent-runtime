@@ -1,4 +1,3 @@
-import pytest
 from pydantic import BaseModel
 
 from agentrt.checkpoint import InMemoryCheckpointer
@@ -136,3 +135,23 @@ def test_a_failed_run_keeps_its_state_and_its_checkpoints():
     assert result.state.messages[-1].content == "ok", "work before the failure survives"
     assert cp.run_status("r1") == "failed"
     assert [h["step"] for h in cp.history("r1")] == [0, 1]
+    
+
+def test_a_raising_router_still_leaves_the_run_in_a_terminal_status():
+    cp = InMemoryCheckpointer()
+
+    def bad_router(state):
+        raise ValueError("router exploded")
+
+    g = StateGraph(AgentState)
+    g.add_node("a", lambda state, ctx: {})
+    g.set_entry("a")
+    g.add_conditional_edge("a", bad_router, {END})
+
+    result = Runtime(graph=g.compile(), provider=ScriptedProvider([]), checkpointer=cp).run(
+        run_id="r1"
+    )
+
+    assert result.status == "failed"
+    assert isinstance(result.error, ValueError)
+    assert cp.run_status("r1") == "failed", "a run must never be left marked running"
