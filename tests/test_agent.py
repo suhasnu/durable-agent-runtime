@@ -6,6 +6,10 @@ from agentrt.runtime import Runtime
 from agentrt.state import AgentState
 from agentrt.tools import ToolRegistry, tool
 from agentrt.types import Message
+from agentrt.graph import END, StateGraph
+from agentrt.checkpoint import InMemoryCheckpointer
+
+
 
 CALLED: list[str] = []
 
@@ -79,8 +83,10 @@ def test_usage_accumulates_across_steps():
 
 def test_the_step_limit_stops_a_loop():
     script = [calls("lookup", {"key": str(i)}, call_id=f"c{i}") for i in range(10)]
-    with pytest.raises(RuntimeError, match="did not finish"):
-        run(script, max_steps=3)
+    result = run(script, max_steps=3)
+    assert result.status == "failed"
+    assert "did not finish" in str(result.error)
+    assert len(result.state.messages) > 1, "partial work is not thrown away"
 
 
 def test_the_history_records_which_nodes_ran():
