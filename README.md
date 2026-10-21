@@ -1,5 +1,7 @@
 # durable-agent-runtime
 
+[![ci](https://github.com/suhasnu/durable-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/suhasnu/durable-agent-runtime/actions/workflows/ci.yml)
+
 An agent runtime with durable execution, built from scratch to understand what
 agent frameworks actually do.
 
