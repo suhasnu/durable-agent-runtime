@@ -237,6 +237,17 @@ class SqliteCheckpointer:
             )
         self.complete_invocation(run_id, call_id, result, is_error)
         
+    def discard_invocation(self, run_id: str, call_id: str) -> None:
+        """Erase a record so the call looks never attempted.
+
+        Not the same as completing it with an empty result: a completed record
+        is replayed on the next pass, which would hand the model an empty
+        string where a tool result belongs.
+        """
+        self._conn.execute(
+            "DELETE FROM tool_invocations WHERE run_id=? AND call_id=?", (run_id, call_id)
+        )
+        
 def _to_invocation(row: sqlite3.Row) -> InvocationRecord:
     return InvocationRecord(
         call_id=row["call_id"],

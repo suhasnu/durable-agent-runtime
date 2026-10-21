@@ -97,8 +97,6 @@ class Runtime:
         checkpoint = self.checkpointer.latest_checkpoint(run_id, self.graph.state_type)
         if checkpoint is None:
             raise KeyError(f"no checkpoint for run {run_id!r}")
-        
-        self._reconcile_dangling(run_id)
 
         if checkpoint.next_node == END:
             # Already finished. Flipping the status to running and back would
@@ -109,6 +107,8 @@ class Runtime:
                 state=checkpoint.state,
                 steps=checkpoint.step,
             )
+
+        self._reconcile_dangling(run_id)
 
         self.checkpointer.set_run_status(run_id, "running")
         return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
@@ -126,10 +126,19 @@ class Runtime:
           otherwise           -> refuse; a human decides via resolve_invocation
         """
         for record in self.checkpointer.dangling_invocations(run_id):
-            tool = self.tools.get(record.tool_name)
+            try:
+                tool = self.tools.get(record.tool_name)
+            except ToolNotFound:
+                # Without the tool's definition there is no way to read its
+                # flags, so there is no basis for calling it safe to retry.
+                self.checkpointer.set_run_status(run_id, "needs_resolution")
+                raise UncertainSideEffect(record.tool_name, record.call_id) from None
+
             if not tool.side_effecting or tool.idempotent:
                 self.checkpointer.discard_invocation(run_id, record.call_id)
                 continue
+
+            self.checkpointer.set_run_status(run_id, "needs_resolution")
             raise UncertainSideEffect(record.tool_name, record.call_id)
 
     def _drive(self, run_id: str, state: BaseModel, node: str, step: int) -> RunResult:
@@ -236,8 +245,9 @@ def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResul
             continue
 
         if prior is not None:
-            # A `started` record with no `completed` record. Undecidable:
-            # commit 14 adds the cases that can be decided.
+            # Unreachable in the resume path: _reconcile_dangling has already
+            # discarded or refused every started record. A safety net, so a bug
+            # in reconciliation surfaces here rather than as a repeated effect.
             raise UncertainSideEffect(prior.tool_name, prior.call_id)
 
         try:

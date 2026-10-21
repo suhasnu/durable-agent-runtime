@@ -316,16 +316,14 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
     assert charges == [49.0], "the charge happened before the crash"
 
     
-    resumed = Runtime(
-        graph=graph,
-        provider=ScriptedProvider([says("done")]),
-        tools=registry,
-        checkpointer=cp,
-    ).resume("r1")
+    with pytest.raises(UncertainSideEffect, match="may have executed"):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([says("done")]),
+            tools=registry,
+            checkpointer=cp,
+        ).resume("r1")
 
-    assert resumed.status == "failed"
-    assert isinstance(resumed.error, UncertainSideEffect)
-    assert "may have executed" in str(resumed.error)
     assert charges == [49.0], "the card must be charged exactly once"
     
 class CrashOnStep(InMemoryCheckpointer):
@@ -406,3 +404,207 @@ def test_a_reused_call_id_with_different_arguments_is_refused():
 
     assert result.status == "failed"
     assert "different arguments" in str(result.error)
+    
+def test_a_read_only_tool_is_simply_re_run_after_a_crash():
+    """No side effect means nothing to be uncertain about."""
+    ran: list[str] = []
+
+    @tool
+    def lookup(key: str) -> str:
+        """Look something up."""
+        ran.append(key)
+        if len(ran) == 1:
+            raise ProcessKilled
+        return f"value of {key}"
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([lookup])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("lookup", {"key": "x"})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    resumed = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("done")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    assert resumed.status == "completed"
+    assert ran == ["x", "x"], "re-running a read-only tool is free"
+
+
+def test_an_idempotent_tool_is_re_run_after_a_crash():
+    """It has side effects, but its author declared them safe to repeat."""
+    flags: list[str] = []
+
+    @tool(side_effecting=True, idempotent=True)
+    def set_flag(name: str) -> str:
+        """Set a flag. Setting it twice is the same as setting it once."""
+        flags.append(name)
+        if len(flags) == 1:
+            raise ProcessKilled
+        return f"{name}=true"
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([set_flag])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("set_flag", {"name": "ready"})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    resumed = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("done")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    assert resumed.status == "completed"
+    assert flags == ["ready", "ready"]
+
+
+def test_reconciliation_discards_rather_than_completing_the_record():
+    """The trap: a reclaimed record completed with an empty result would be
+    replayed, and the model would receive "" instead of a tool result."""
+    ran: list[str] = []
+
+    @tool
+    def lookup(key: str) -> str:
+        """Look something up."""
+        ran.append(key)
+        if len(ran) == 1:
+            raise ProcessKilled
+        return f"value of {key}"
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([lookup])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("lookup", {"key": "x"})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    assert len(cp.dangling_invocations("r1")) == 1
+
+    resumed = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("done")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    tool_message = next(m for m in resumed.state.messages if m.role == "tool")
+    assert tool_message.tool_results[0].content == "value of x", (
+        "a reclaimed record must be deleted, not completed with an empty result"
+    )
+    
+def test_a_dangling_call_to_an_unregistered_tool_is_refused():
+    """No definition means no flags, so there is no basis for calling it safe."""
+    cp = InMemoryCheckpointer()
+    graph = build_agent().compile()
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        raise ProcessKilled
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("charge_card", {"amount": 49.0})]),
+            tools=ToolRegistry([charge_card]),
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    # Resume with the tool missing from the registry.
+    with pytest.raises(UncertainSideEffect):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([says("done")]),
+            tools=ToolRegistry([]),
+            checkpointer=cp,
+        ).resume("r1")
+
+
+def test_a_refused_resume_marks_the_run_as_needing_resolution():
+    cp = InMemoryCheckpointer()
+    graph = build_agent().compile()
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        raise ProcessKilled
+
+    registry = ToolRegistry([charge_card])
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("charge_card", {"amount": 49.0})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    with pytest.raises(UncertainSideEffect):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([says("done")]),
+            tools=registry,
+            checkpointer=cp,
+        ).resume("r1")
+
+    assert cp.run_status("r1") == "needs_resolution"
+    assert [r["run_id"] for r in cp.list_runs(status="needs_resolution")] == ["r1"]
+
+
+def test_an_operator_can_resolve_a_dangling_call_and_the_run_continues():
+    """The path out of a refusal: a human says what actually happened."""
+    charges: list[float] = []
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        charges.append(amount)
+        raise ProcessKilled
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([charge_card])
+    graph = build_agent().compile()
+
+    with pytest.raises(ProcessKilled):
+        Runtime(
+            graph=graph,
+            provider=ScriptedProvider([calls("charge_card", {"amount": 49.0})]),
+            tools=registry,
+            checkpointer=cp,
+        ).run(AgentState(messages=[Message(role="user", content="charge 49")]), run_id="r1")
+
+    cp.resolve_invocation("r1", "call_1", "charged 49.0 (confirmed in the payment log)")
+
+    resumed = Runtime(
+        graph=graph,
+        provider=ScriptedProvider([says("order complete")]),
+        tools=registry,
+        checkpointer=cp,
+    ).resume("r1")
+
+    assert resumed.status == "completed"
+    assert charges == [49.0], "the tool was not run a second time"
+    tool_message = next(m for m in resumed.state.messages if m.role == "tool")
+    assert "confirmed in the payment log" in tool_message.tool_results[0].content
