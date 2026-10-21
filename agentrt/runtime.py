@@ -13,15 +13,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer
-from .errors import UncertainSideEffect
+from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
+from .errors import FatalError, UncertainSideEffect
 from .graph import END, CompiledGraph
 from .providers.base import Provider
 from .state import apply_updates
 from .tools import InvalidToolArguments, ToolNotFound, ToolRegistry
 from .types import Message, ToolCall, ToolResult, new_id
-from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
-from .errors import FatalError, UncertainSideEffect
 
 
 @dataclass
@@ -99,6 +97,8 @@ class Runtime:
         checkpoint = self.checkpointer.latest_checkpoint(run_id, self.graph.state_type)
         if checkpoint is None:
             raise KeyError(f"no checkpoint for run {run_id!r}")
+        
+        self._reconcile_dangling(run_id)
 
         if checkpoint.next_node == END:
             # Already finished. Flipping the status to running and back would
@@ -112,6 +112,25 @@ class Runtime:
 
         self.checkpointer.set_run_status(run_id, "running")
         return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
+    
+    def _reconcile_dangling(self, run_id: str) -> None:
+        """Decide what to do about tools that started and never reported back.
+
+        A `started` record with no `completed` record means the process died
+        between committing the intent and committing the outcome, so the effect
+        may or may not have happened and nothing in the database can say which.
+
+        Three cases, and only three:
+          not side-effecting  -> re-running is free, discard the record
+          idempotent          -> the author promised twice equals once, discard
+          otherwise           -> refuse; a human decides via resolve_invocation
+        """
+        for record in self.checkpointer.dangling_invocations(run_id):
+            tool = self.tools.get(record.tool_name)
+            if not tool.side_effecting or tool.idempotent:
+                self.checkpointer.discard_invocation(run_id, record.call_id)
+                continue
+            raise UncertainSideEffect(record.tool_name, record.call_id)
 
     def _drive(self, run_id: str, state: BaseModel, node: str, step: int) -> RunResult:
         history: list[str] = []
