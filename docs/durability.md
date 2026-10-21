@@ -5,7 +5,6 @@ without losing work or repeating a side effect.**
 
 Everything below is what that costs.
 
-run the node -> apply its updates -> decide the next node -> CHECKPOINT -> continue
 
 ## Why state had to stop being local variables
 
@@ -19,6 +18,7 @@ change; this document picks up after it.
 
 Each step of a run does this, in this order:
 
+run the node -> apply its updates -> decide the next node -> CHECKPOINT -> continue
 
 The placement is the whole thing. Checkpointing before the node runs would mean
 a resume runs that node again, which for a tool means a second email. Writing it
