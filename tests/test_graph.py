@@ -2,6 +2,7 @@ import pytest
 
 from agentrt.graph import END, StateGraph
 from agentrt.state import AgentState
+from agentrt.types import Message
 
 
 def noop(state, ctx):
@@ -66,17 +67,6 @@ def test_a_node_cannot_have_both_edge_kinds():
         g.add_conditional_edge("a", lambda s: END, {END})
 
 
-def test_a_conditional_edge_picks_by_state():
-    g = build()
-    g.add_node("b", noop)
-    g.add_conditional_edge("a", lambda s: "b" if s.step > 0 else END, {"b", END})
-    g.add_edge("b", END)
-    compiled = g.compile()
-
-    assert compiled.next_node("a", AgentState(step=0)) == END
-    assert compiled.next_node("a", AgentState(step=1)) == "b"
-
-
 def test_router_returning_an_undeclared_target_is_caught():
     g = build()
     g.add_conditional_edge("a", lambda s: "surprise", {END})
@@ -116,7 +106,7 @@ def test_a_cycle_with_a_conditional_exit_is_allowed():
     g.add_node("a", noop)
     g.add_node("b", noop)
     g.set_entry("a")
-    g.add_conditional_edge("a", lambda s: "b" if s.step < 3 else END, {"b", END})
+    g.add_conditional_edge("a", lambda s: "b" if s.messages else END, {"b", END})
     g.add_edge("b", "a")
     g.compile()
 
@@ -131,3 +121,13 @@ def test_a_string_of_targets_is_rejected():
     g = build()
     with pytest.raises(TypeError, match="not a string"):
         g.add_conditional_edge("a", lambda s: END, "abc")
+        
+def test_a_conditional_edge_picks_by_state():
+    g = build()
+    g.add_node("b", noop)
+    g.add_conditional_edge("a", lambda s: "b" if s.messages else END, {"b", END})
+    g.add_edge("b", END)
+    compiled = g.compile()
+
+    assert compiled.next_node("a", AgentState()) == END
+    assert compiled.next_node("a", AgentState(messages=[Message(role="user", content="x")])) == "b"

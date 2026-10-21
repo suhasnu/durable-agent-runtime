@@ -12,9 +12,8 @@ from agentrt.tools import ToolRegistry, tool
 from agentrt.types import Message
 
 
-def test_a_state_type_without_a_step_field_still_runs():
-    """The runtime maintains `step` when the state declares one, and does not
-    require it. A graph with its own state type is not forced to carry it."""
+def test_a_custom_state_type_runs():
+    """graph can bring its own state model"""
 
     class Minimal(BaseModel):
         messages: Messages = []
@@ -28,20 +27,24 @@ def test_a_state_type_without_a_step_field_still_runs():
     assert result.steps == 1
 
 
-def test_the_context_step_matches_the_state_step():
-    seen = {}
+def test_the_context_step_numbers_the_running_node():
+    seen: list[int] = []
 
     def record(state, ctx):
-        seen["ctx"] = ctx.step
+        seen.append(ctx.step)
         return {}
 
     g = StateGraph(AgentState)
-    g.add_node("once", record)
-    g.set_entry("once")
-    g.add_edge("once", END)
+    g.add_node("a", record)
+    g.add_node("b", record)
+    g.set_entry("a")
+    g.add_edge("a", "b")
+    g.add_edge("b", END)
 
     result = Runtime(graph=g.compile(), provider=ScriptedProvider([])).run()
-    assert seen["ctx"] == result.state.step == 1
+
+    assert seen == [1, 2], "a node sees its own step number, counting from one"
+    assert result.steps == 2
 
 
 def test_nodes_receive_the_context_they_were_given():

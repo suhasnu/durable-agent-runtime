@@ -27,10 +27,6 @@ def test_usage_accumulates():
     assert out.usage.output_tokens == 3
 
 
-def test_scalar_fields_replace():
-    assert apply_updates(AgentState(step=3), {"step": 7}).step == 7
-
-
 def test_updates_do_not_share_objects_with_the_old_state():
     s0 = AgentState(messages=[Message(role="user", content="hi")])
     s1 = apply_updates(s0, {"messages": Message(role="assistant", content="hello")})
@@ -49,7 +45,7 @@ def test_a_node_cannot_mutate_state_through_the_object_it_returned():
 
 def test_a_badly_typed_update_is_rejected_at_the_merge():
     with pytest.raises(ValidationError):
-        apply_updates(AgentState(), {"step": "not an int"})
+        apply_updates(AgentState(), {"messages": [{"role": "not a role"}]})
 
 
 def test_an_empty_update_still_returns_a_copy():
@@ -71,3 +67,9 @@ def test_state_round_trips_through_json():
         step=3,
     )
     assert AgentState.model_validate_json(state.model_dump_json()) == state
+    
+def test_scalar_fields_replace():
+    class Labelled(AgentState):
+        label: str = ""
+
+    assert apply_updates(Labelled(label="a"), {"label": "b"}).label == "b"

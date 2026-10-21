@@ -164,16 +164,7 @@ class Runtime:
             # "running" forever, which is indistinguishable from a paused run.
             try:
                 updates = self.graph.node(node)(state, ctx) or {}
-
                 step += 1
-                if "step" in type(state).model_fields:
-                    # Optional bookkeeping: maintained when the state declares
-                    # it, so a graph with its own state type is not forced to
-                    # carry it.
-                    updates = {**updates, "step": step}
-
-                # One merge per node, not two. apply_updates deep copies and
-                # validates, so a second call doubles the cost of every step.
                 state = apply_updates(state, updates)
 
                 next_node = self.graph.next_node(node, state)

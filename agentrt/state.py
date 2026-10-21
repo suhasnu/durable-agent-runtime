@@ -56,7 +56,6 @@ class AgentState(BaseModel):
 
     messages: Messages = Field(default_factory=list)
     usage: Tokens = Field(default_factory=Usage)
-    step: int = 0
 
 
 def reducer_for(model: type[BaseModel], field: str) -> Reducer:

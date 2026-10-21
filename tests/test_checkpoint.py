@@ -7,11 +7,10 @@ from agentrt.state import AgentState
 from agentrt.types import Message, Usage
 
 
-def state(text: str = "hi", step: int = 0) -> AgentState:
+def state(text: str = "hi") -> AgentState:
     return AgentState(
         messages=[Message(role="user", content=text)],
         usage=Usage(input_tokens=10, output_tokens=2),
-        step=step,
     )
 
 
@@ -31,7 +30,7 @@ def test_latest_returns_the_highest_step():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")
     for step in range(5):
-        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state(step=step)))
+        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state()))
 
     assert cp.latest_checkpoint("r1", AgentState).step == 4
 
@@ -41,7 +40,7 @@ def test_an_older_checkpoint_is_still_readable():
     cp.create_run("r1")
     for step in range(5):
         cp.put_checkpoint(
-            Checkpoint(run_id="r1", step=step, next_node="model", state=state(f"step {step}", step))
+            Checkpoint(run_id="r1", step=step, next_node="model", state=state(f"step {step}"))
         )
 
     old = cp.checkpoint_at("r1", 2, AgentState)
@@ -67,7 +66,7 @@ def test_history_is_ordered_by_step():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")
     for step in [3, 0, 2, 1]:
-        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state(step=step)))
+        cp.put_checkpoint(Checkpoint(run_id="r1", step=step, next_node="model", state=state()))
 
     assert [h["step"] for h in cp.history("r1")] == [0, 1, 2, 3]
 
@@ -97,10 +96,10 @@ def test_survives_a_real_file(tmp_path):
 def test_writing_the_same_step_twice_is_rejected():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")
-    cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="model", state=state("first", 5)))
+    cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="model", state=state("first")))
 
     with pytest.raises(sqlite3.IntegrityError):
-        cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="tools", state=state("second", 5)))
+        cp.put_checkpoint(Checkpoint(run_id="r1", step=5, next_node="tools", state=state("second")))
 
     assert cp.checkpoint_at("r1", 5, AgentState).state.messages[0].content == "first"
 
