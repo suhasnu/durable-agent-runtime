@@ -64,7 +64,6 @@ def test_state_round_trips_through_json():
     state = AgentState(
         messages=[Message(role="user", content="hi")],
         usage=Usage(input_tokens=10, output_tokens=2),
-        step=3,
     )
     assert AgentState.model_validate_json(state.model_dump_json()) == state
     
