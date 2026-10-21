@@ -38,9 +38,15 @@ def charge_card(amount_eur: float) -> str:
     raise ProcessKilled  # the machine dies the instant after the charge lands
 
 
+SET_CALLS: list[str] = []
+
+
 @tool(side_effecting=True, idempotent=True)
 def set_order_status(status: str) -> str:
     """Set the order status. Setting it twice is the same as setting it once."""
+    SET_CALLS.append(status)
+    if len(SET_CALLS) == 1:
+        raise ProcessKilled
     return f"status={status}"
 
 
@@ -94,12 +100,26 @@ def main() -> None:
     print(f"  status: {result.status}")
     print(f"  final:  {result.last_message.content}")
     print(f"\ncharges in ledger: {charges()}  (still one)")
+    
+    banner("5. the same crash, but the tool is declared idempotent")
+    try:
+        runtime([calls("set_order_status", {"status": "shipped"})]).run(
+            AgentState(messages=[Message(role="user", content="mark it shipped")]),
+            run_id="demo2",
+        )
+    except ProcessKilled:
+        print("process killed mid-tool again")
+
+    result = runtime([says("Order marked as shipped.")]).resume("demo2")
+    print(f"\n  resumed with no human involved: {result.status}")
+    print(f"  set_order_status ran {len(SET_CALLS)} times, which its author declared safe")
 
     banner("the point")
     print(
-        "The charge happened exactly once across a crash and a resume, and the\n"
-        "runtime never guessed. An idempotent tool like set_order_status would\n"
-        "have been re-run automatically instead of stopping for a human."
+        "Two crashes, two different answers. The charge happened exactly once\n"
+        "and needed a human, because nothing could tell whether it had gone\n"
+        "through. The status update simply ran again, because its author\n"
+        "declared that safe. The runtime never guessed either way."
     )
 
 
