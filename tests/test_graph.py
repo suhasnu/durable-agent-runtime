@@ -79,8 +79,8 @@ def test_mermaid_export_mentions_every_node():
     g = build()
     g.add_edge("a", END)
     assert "a" in g.compile().to_mermaid()
-    
-    
+
+
 def test_compiling_takes_a_snapshot_of_the_builder():
     g = build()
     g.add_edge("a", END)
@@ -121,7 +121,7 @@ def test_a_string_of_targets_is_rejected():
     g = build()
     with pytest.raises(TypeError, match="not a string"):
         g.add_conditional_edge("a", lambda s: END, "abc")
-        
+
 def test_a_conditional_edge_picks_by_state():
     g = build()
     g.add_node("b", noop)

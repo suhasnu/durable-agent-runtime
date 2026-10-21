@@ -170,7 +170,7 @@ class SqliteCheckpointer:
             next_node=row["next_node"],
             state=state_type.model_validate_json(row["state"]),
         )
-    
+
     def begin_invocation(
         self, run_id: str, call_id: str, tool_name: str, args: dict[str, Any]
     ) -> None:
@@ -230,7 +230,7 @@ class SqliteCheckpointer:
                 f"only a dangling invocation can be resolved"
             )
         self.complete_invocation(run_id, call_id, result, is_error)
-        
+
     def discard_invocation(self, run_id: str, call_id: str) -> None:
         """Erase a record so the call looks never attempted.
 
@@ -241,7 +241,7 @@ class SqliteCheckpointer:
         self._conn.execute(
             "DELETE FROM tool_invocations WHERE run_id=? AND call_id=?", (run_id, call_id)
         )
-        
+
 def _to_invocation(row: sqlite3.Row) -> InvocationRecord:
     return InvocationRecord(
         call_id=row["call_id"],

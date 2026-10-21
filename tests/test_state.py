@@ -66,7 +66,7 @@ def test_state_round_trips_through_json():
         usage=Usage(input_tokens=10, output_tokens=2),
     )
     assert AgentState.model_validate_json(state.model_dump_json()) == state
-    
+
 def test_scalar_fields_replace():
     class Labelled(AgentState):
         label: str = ""

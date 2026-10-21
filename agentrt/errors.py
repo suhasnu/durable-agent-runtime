@@ -21,7 +21,7 @@ class RetryableError(AgentError):
 
 class FatalError(AgentError):
     """Permanent. Retrying the same call cannot help."""
-    
+
 class UncertainSideEffect(AgentError):
     """A side-effecting tool started but its outcome was never recorded.
 

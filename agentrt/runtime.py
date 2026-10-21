@@ -86,7 +86,7 @@ class Runtime:
             Checkpoint(run_id=run_id, step=0, next_node=self.graph.entry, state=state)
         )
         return self._drive(run_id, state, self.graph.entry, step=0)
-    
+
     def resume(self, run_id: str) -> RunResult:
         """Continue a run from its last checkpoint.
 
@@ -112,7 +112,7 @@ class Runtime:
 
         self.checkpointer.set_run_status(run_id, "running")
         return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
-    
+
     def _reconcile_dangling(self, run_id: str) -> None:
         """Decide what to do about tools that started and never reported back.
 
@@ -179,7 +179,7 @@ class Runtime:
                 return self._finish(run_id, "failed", state, step, history, exc)
 
             node = next_node
-            
+
         return self._finish(run_id, "completed", state, step, history)
 
     def _finish(
@@ -198,7 +198,7 @@ class Runtime:
         return RunResult(
             run_id=run_id, status=status, state=state, steps=step, error=error, history=history
         )
-        
+
 def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResult]:
     """Run tool calls with write-ahead logging.
 

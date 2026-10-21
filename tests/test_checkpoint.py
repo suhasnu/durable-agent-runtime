@@ -86,13 +86,15 @@ def test_survives_a_real_file(tmp_path):
     path = tmp_path / "run.db"
     first = SqliteCheckpointer(path)
     first.create_run("r1")
-    first.put_checkpoint(Checkpoint(run_id="r1", step=0, next_node="model", state=state("persisted")))
+    first.put_checkpoint(
+        Checkpoint(run_id="r1", step=0, next_node="model", state=state("persisted"))
+    )
     first.close()
 
     second = SqliteCheckpointer(path)
     assert second.latest_checkpoint("r1", AgentState).state.messages[0].content == "persisted"
-    
-    
+
+
 def test_writing_the_same_step_twice_is_rejected():
     cp = InMemoryCheckpointer()
     cp.create_run("r1")

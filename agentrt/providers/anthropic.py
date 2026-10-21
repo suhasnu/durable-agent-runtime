@@ -100,7 +100,7 @@ class AnthropicProvider:
             raise RetryableError(f"connection failed: {exc.reason}") from exc
         except (TimeoutError, ConnectionError, json.JSONDecodeError) as exc:
           raise RetryableError(f"{type(exc).__name__}: {exc}") from exc
-        
+
 def _parse_retry_after(value: str | None) -> float | None:
     """Seconds to wait, capped.
 
@@ -112,7 +112,7 @@ def _parse_retry_after(value: str | None) -> float | None:
     try:
         return min(float(value), 30.0)
     except ValueError:
-        return None   
+        return None
 
 
 def _to_wire(messages: list[Message]) -> list[dict[str, Any]]:
@@ -166,7 +166,9 @@ def _from_wire(raw: dict[str, Any]) -> Completion:
         if block.get("type") == "text":
             text_parts.append(block["text"])
         elif block.get("type") == "tool_use":
-            calls.append(ToolCall(id=block["id"], name=block["name"], arguments=block.get("input", {})))
+            calls.append(
+                ToolCall(id=block["id"], name=block["name"], arguments=block.get("input", {}))
+            )
 
     usage = raw.get("usage", {})
     return Completion(

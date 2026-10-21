@@ -116,7 +116,7 @@ class StateGraph:
         unreachable = set(self.nodes) - seen
         if unreachable:
             raise ValueError(f"unreachable nodes: {sorted(unreachable)}")
-          
+
     def _check_can_reach_end(self) -> None:
         """Every node must have some path to END.
 
@@ -182,7 +182,7 @@ class CompiledGraph:
             for target in sorted(edge.targets):
                 lines.append(f"    {source} -.-> {_label(target)}")
         return "\n".join(lines)
-      
-      
+
+
 def _label(node: str) -> str:
     return f"{END}([end])" if node == END else node

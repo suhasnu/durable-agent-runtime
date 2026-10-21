@@ -63,5 +63,7 @@ def test_a_tool_use_response_becomes_tool_calls():
 
 
 def test_a_plain_text_response_has_no_tool_calls():
-    completion = _from_wire({"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"})
+    completion = _from_wire(
+        {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}
+    )
     assert completion.message.tool_calls == []

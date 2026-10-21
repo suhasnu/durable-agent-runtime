@@ -61,7 +61,7 @@ def test_nodes_receive_the_context_they_were_given():
 
     Runtime(graph=g.compile(), provider=ScriptedProvider([]), system="be brief").run()
     assert seen["system"] == "be brief"
-    
+
 
 def test_every_step_is_checkpointed():
 
@@ -138,7 +138,7 @@ def test_a_failed_run_keeps_its_state_and_its_checkpoints():
     assert result.state.messages[-1].content == "ok", "work before the failure survives"
     assert cp.run_status("r1") == "failed"
     assert [h["step"] for h in cp.history("r1")] == [0, 1]
-    
+
 
 def test_a_raising_router_still_leaves_the_run_in_a_terminal_status():
     cp = InMemoryCheckpointer()
@@ -274,7 +274,7 @@ def test_a_run_survives_a_new_process(tmp_path):
     assert result.status == "completed"
     assert result.last_message.content == "finished in another process"
     assert result.state.messages[0].content == "go", "the original question survived"
-    
+
 
 class ProcessKilled(BaseException):
     """Not an Exception, so nothing in the runtime catches it.
@@ -318,7 +318,7 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
 
     assert charges == [49.0], "the charge happened before the crash"
 
-    
+
     with pytest.raises(UncertainSideEffect, match="may have executed"):
         Runtime(
             graph=graph,
@@ -328,7 +328,7 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
         ).resume("r1")
 
     assert charges == [49.0], "the card must be charged exactly once"
-    
+
 class CrashOnStep(InMemoryCheckpointer):
     """Dies when writing one particular checkpoint.
 
@@ -383,8 +383,10 @@ def test_a_completed_invocation_is_replayed_not_re_executed():
     assert resumed.status == "completed"
     assert ran == ["x"], "the tool must not run a second time"
     tool_message = next(m for m in resumed.state.messages if m.role == "tool")
-    assert tool_message.tool_results[0].content == "value of x", "the logged result reached the model"
-    
+    assert tool_message.tool_results[0].content == "value of x", (
+        "the logged result reached the model"
+    )
+
 def test_a_reused_call_id_with_different_arguments_is_refused():
     """Replaying by call id alone would silently answer the wrong question."""
 
@@ -407,7 +409,7 @@ def test_a_reused_call_id_with_different_arguments_is_refused():
 
     assert result.status == "failed"
     assert "different arguments" in str(result.error)
-    
+
 def test_a_read_only_tool_is_simply_re_run_after_a_crash():
     """No side effect means nothing to be uncertain about."""
     ran: list[str] = []
@@ -516,7 +518,7 @@ def test_reconciliation_discards_rather_than_completing_the_record():
     assert tool_message.tool_results[0].content == "value of x", (
         "a reclaimed record must be deleted, not completed with an empty result"
     )
-    
+
 def test_a_dangling_call_to_an_unregistered_tool_is_refused():
     """No definition means no flags, so there is no basis for calling it safe."""
     cp = InMemoryCheckpointer()

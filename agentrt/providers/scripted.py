@@ -75,7 +75,7 @@ def calls(
         usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),
         stop_reason="tool_use",
     )
-    
+
 
 def calls_many(
     specs: list[tuple[str, dict[str, Any]]],

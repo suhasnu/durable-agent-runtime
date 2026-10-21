@@ -100,7 +100,7 @@ def main() -> None:
     print(f"  status: {result.status}")
     print(f"  final:  {result.last_message.content}")
     print(f"\ncharges in ledger: {charges()}  (still one)")
-    
+
     banner("5. the same crash, but the tool is declared idempotent")
     try:
         runtime([calls("set_order_status", {"status": "shipped"})]).run(
