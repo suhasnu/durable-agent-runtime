@@ -15,12 +15,12 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
-from .errors import FatalError, RetryableError, UncertainSideEffect
+from .errors import BudgetExceeded, FatalError, RetryableError, UncertainSideEffect
 from .graph import END, CompiledGraph
 from .providers.base import Provider
 from .state import apply_updates
 from .tools import InvalidToolArguments, ToolNotFound, ToolRegistry
-from .types import Message, ToolCall, ToolResult, new_id
+from .types import Message, ToolCall, ToolResult, Usage, new_id
 
 
 @dataclass
@@ -41,6 +41,32 @@ class RetryPolicy:
             raise ValueError("max_attempts must be at least 1")
 
 
+@dataclass(frozen=True)
+class Budget:
+    """Ceilings on a run, checked before spending rather than after.
+
+    The token check reserves `max_tokens` for the call about to be made,
+    because the cost of a call is not known until it returns, and by then the
+    money is spent. Only output is reserved: the call's input is the whole
+    history and is not counted until it returns, so the last call allowed can
+    still overshoot by that much.
+    """
+
+    max_total_tokens: int | None = None
+    max_model_calls: int | None = None
+
+    def check(self, spent: Usage, reserving: int) -> None:
+        if self.max_model_calls is not None and spent.calls >= self.max_model_calls:
+            raise BudgetExceeded(
+                f"model call budget spent: {spent.calls} of {self.max_model_calls}"
+            )
+        if self.max_total_tokens is not None and spent.total + reserving > self.max_total_tokens:
+            raise BudgetExceeded(
+                f"token budget would be exceeded: {spent.total} spent plus "
+                f"{reserving} reserved against a limit of {self.max_total_tokens}"
+            )
+
+
 @dataclass
 class RunContext:
     """What a node is allowed to reach. Passed in, never imported."""
@@ -51,6 +77,7 @@ class RunContext:
     checkpointer: SqliteCheckpointer
     system: str | None = None
     max_tokens: int = 2048
+    budget: Budget = field(default_factory=Budget)
     step: int = 0
     retries: int = 0
 
@@ -89,6 +116,7 @@ class Runtime:
         checkpointer: SqliteCheckpointer | None = None,
         system: str | None = None,
         max_tokens: int = 2048,
+        budget: Budget | None = None,
         max_steps: int = 20,
         retry: RetryPolicy | None = None,
     ):
@@ -98,6 +126,7 @@ class Runtime:
         self.checkpointer = checkpointer or InMemoryCheckpointer()
         self.system = system
         self.max_tokens = max_tokens
+        self.budget = budget or Budget()
         self.max_steps = max_steps
         self.retry = retry or RetryPolicy()
 
@@ -196,6 +225,7 @@ class Runtime:
             checkpointer=self.checkpointer,
             system=self.system,
             max_tokens=self.max_tokens,
+            budget=self.budget,
         )
 
         while node != END:

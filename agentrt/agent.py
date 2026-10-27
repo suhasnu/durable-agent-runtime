@@ -16,6 +16,8 @@ from .types import Message
 
 
 def model_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:
+    ctx.budget.check(state.usage, ctx.max_tokens)
+
     completion = ctx.provider.complete(
         messages=state.messages,
         tools=ctx.tools.specs() or None,
@@ -24,7 +26,11 @@ def model_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:
     )
     if completion.stop_reason == "max_tokens":
         raise TruncatedResponse(ctx.max_tokens)
-    return {"messages": completion.message, "usage": completion.usage}
+
+    return {
+        "messages": [completion.message],
+        "usage": completion.usage.model_copy(update={"calls": 1}),
+    }
 
 
 def tools_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:

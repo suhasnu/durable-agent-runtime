@@ -7,6 +7,12 @@ def test_usage_adds():
     assert total.total == 18
 
 
+def test_usage_sums_model_calls_without_counting_them_as_tokens():
+    total = Usage(input_tokens=10, output_tokens=2, calls=1) + Usage(calls=2)
+    assert total.calls == 3
+    assert total.total == 12, "calls are a count, not tokens"
+
+
 def test_a_message_round_trips_through_json():
     original = Message(
         role="assistant",

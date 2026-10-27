@@ -23,6 +23,13 @@ class FatalError(AgentError):
     """Permanent. Retrying the same call cannot help."""
 
 
+class BudgetExceeded(FatalError):
+    """The run would exceed a ceiling the caller set.
+
+    Fatal rather than retryable: a budget does not refill on retry.
+    """
+
+
 class TruncatedResponse(FatalError):
     """The model stopped because it hit the token ceiling, mid-sentence.
 
