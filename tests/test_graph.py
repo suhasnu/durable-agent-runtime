@@ -122,6 +122,7 @@ def test_a_string_of_targets_is_rejected():
     with pytest.raises(TypeError, match="not a string"):
         g.add_conditional_edge("a", lambda s: END, "abc")
 
+
 def test_a_conditional_edge_picks_by_state():
     g = build()
     g.add_node("b", noop)

@@ -28,9 +28,13 @@ def main() -> None:
         system="Use the tools available to you. Answer in one sentence.",
     )
     result = runtime.run(
-        AgentState(messages=[
-            Message(role="user", content="How many more people live in Frankfurt than in Fulda?")
-        ])
+        AgentState(
+            messages=[
+                Message(
+                    role="user", content="How many more people live in Frankfurt than in Fulda?"
+                )
+            ]
+        )
     )
     if result.status != "completed":
         print(f"\nrun failed after {result.steps} steps: {result.error}")

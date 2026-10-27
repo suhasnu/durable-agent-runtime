@@ -68,8 +68,9 @@ def main() -> None:
     store = SqliteCheckpointer(db)
 
     def runtime(script):
-        return Runtime(graph=graph, provider=ScriptedProvider(script), tools=registry,
-                       checkpointer=store)
+        return Runtime(
+            graph=graph, provider=ScriptedProvider(script), tools=registry, checkpointer=store
+        )
 
     banner("1. run, and die mid-charge")
     try:

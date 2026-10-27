@@ -13,10 +13,15 @@ def test_messages_append_rather_than_replace():
 
 def test_a_list_of_messages_appends_too():
     state = AgentState(messages=[Message(role="user", content="hi")])
-    out = apply_updates(state, {"messages": [
-        Message(role="assistant", content="a"),
-        Message(role="tool", content="b"),
-    ]})
+    out = apply_updates(
+        state,
+        {
+            "messages": [
+                Message(role="assistant", content="a"),
+                Message(role="tool", content="b"),
+            ]
+        },
+    )
     assert len(out.messages) == 3
 
 
@@ -66,6 +71,7 @@ def test_state_round_trips_through_json():
         usage=Usage(input_tokens=10, output_tokens=2),
     )
     assert AgentState.model_validate_json(state.model_dump_json()) == state
+
 
 def test_scalar_fields_replace():
     class Labelled(AgentState):

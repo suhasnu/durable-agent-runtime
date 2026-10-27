@@ -89,11 +89,14 @@ def test_the_history_records_which_nodes_ran():
     result = run([calls("lookup", {"key": "x"}), says("done")])
     assert result.history == ["model", "tools", "model"]
 
+
 def test_several_tool_calls_in_one_turn_all_run():
-    result = run([
-        calls_many([("lookup", {"key": "a"}), ("lookup", {"key": "b"})]),
-        says("done"),
-    ])
+    result = run(
+        [
+            calls_many([("lookup", {"key": "a"}), ("lookup", {"key": "b"})]),
+            says("done"),
+        ]
+    )
 
     assert CALLED == ["a", "b"]
     results = result.state.messages[2].tool_results
@@ -102,10 +105,12 @@ def test_several_tool_calls_in_one_turn_all_run():
 
 
 def test_one_failing_call_does_not_stop_the_others():
-    result = run([
-        calls_many([("lookup", {"key": "a"}), ("explode", {}), ("lookup", {"key": "b"})]),
-        says("partly done"),
-    ])
+    result = run(
+        [
+            calls_many([("lookup", {"key": "a"}), ("explode", {}), ("lookup", {"key": "b"})]),
+            says("partly done"),
+        ]
+    )
 
     assert CALLED == ["a", "b"]
     results = result.state.messages[2].tool_results

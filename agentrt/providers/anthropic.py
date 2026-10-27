@@ -55,7 +55,6 @@ class AnthropicProvider:
 
         return _from_wire(self._post(body))
 
-
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
             API_URL,
@@ -81,7 +80,8 @@ class AnthropicProvider:
         except urllib.error.URLError as exc:
             raise RetryableError(f"connection failed: {exc.reason}") from exc
         except (TimeoutError, ConnectionError, json.JSONDecodeError) as exc:
-          raise RetryableError(f"{type(exc).__name__}: {exc}") from exc
+            raise RetryableError(f"{type(exc).__name__}: {exc}") from exc
+
 
 def _parse_retry_after(value: str | None) -> float | None:
     """Seconds to wait, capped.

@@ -320,7 +320,6 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
 
     assert charges == [49.0], "the charge happened before the crash"
 
-
     with pytest.raises(UncertainSideEffect, match="may have executed"):
         Runtime(
             graph=graph,
@@ -330,6 +329,7 @@ def test_a_tool_does_not_run_twice_when_a_crash_lands_inside_tools_node():
         ).resume("r1")
 
     assert charges == [49.0], "the card must be charged exactly once"
+
 
 class CrashOnStep(InMemoryCheckpointer):
     """Dies when writing one particular checkpoint.
@@ -389,6 +389,7 @@ def test_a_completed_invocation_is_replayed_not_re_executed():
         "the logged result reached the model"
     )
 
+
 def test_a_reused_call_id_with_different_arguments_is_refused():
     """Replaying by call id alone would silently answer the wrong question."""
 
@@ -400,17 +401,20 @@ def test_a_reused_call_id_with_different_arguments_is_refused():
     cp = InMemoryCheckpointer()
     result = Runtime(
         graph=build_agent().compile(),
-        provider=ScriptedProvider([
-            calls("lookup", {"key": "a"}, call_id="call_1"),
-            calls("lookup", {"key": "b"}, call_id="call_1"),
-            says("done"),
-        ]),
+        provider=ScriptedProvider(
+            [
+                calls("lookup", {"key": "a"}, call_id="call_1"),
+                calls("lookup", {"key": "b"}, call_id="call_1"),
+                says("done"),
+            ]
+        ),
         tools=ToolRegistry([lookup]),
         checkpointer=cp,
     ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
 
     assert result.status == "failed"
     assert "different arguments" in str(result.error)
+
 
 def test_a_read_only_tool_is_simply_re_run_after_a_crash():
     """No side effect means nothing to be uncertain about."""
@@ -520,6 +524,7 @@ def test_reconciliation_discards_rather_than_completing_the_record():
     assert tool_message.tool_results[0].content == "value of x", (
         "a reclaimed record must be deleted, not completed with an empty result"
     )
+
 
 def test_a_dangling_call_to_an_unregistered_tool_is_refused():
     """No definition means no flags, so there is no basis for calling it safe."""
@@ -749,6 +754,7 @@ def test_retrying_a_tools_node_replays_rather_than_repeating():
 
     assert result.status == "completed"
     assert charges == [49.0], "the card was charged once despite the retries"
+
 
 def test_a_retry_policy_must_allow_at_least_one_attempt():
     """max_attempts=0 would skip the loop body entirely and fail the run with

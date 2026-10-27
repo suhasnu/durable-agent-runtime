@@ -40,6 +40,7 @@ class RetryPolicy:
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
 
+
 @dataclass
 class RunContext:
     """What a node is allowed to reach. Passed in, never imported."""
@@ -247,6 +248,7 @@ class Runtime:
             history=history,
             retries=retries,
         )
+
 
 def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResult]:
     """Run tool calls with write-ahead logging.

@@ -53,6 +53,7 @@ def says(text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> Comple
         stop_reason="end_turn",
     )
 
+
 def rate_limited(retry_after: float | None = 0.0) -> RetryableError:
     """A transient failure the runtime should retry."""
     return RetryableError("simulated rate limit", retry_after=retry_after)

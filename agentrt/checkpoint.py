@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
 );
 """
 
+
 @dataclass
 class InvocationRecord:
     call_id: str
@@ -65,6 +66,7 @@ class InvocationRecord:
 def hash_args(name: str, args: dict[str, Any]) -> str:
     payload = json.dumps({"tool": name, "args": args}, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
 
 @dataclass
 class Checkpoint:
@@ -241,6 +243,7 @@ class SqliteCheckpointer:
         self._conn.execute(
             "DELETE FROM tool_invocations WHERE run_id=? AND call_id=?", (run_id, call_id)
         )
+
 
 def _to_invocation(row: sqlite3.Row) -> InvocationRecord:
     return InvocationRecord(
