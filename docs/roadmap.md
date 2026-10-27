@@ -37,25 +37,27 @@ pyright) to dev dependencies and CI, plus a static assignment such as
 
 ## The agent graph never checks `stop_reason`
 
-`route_after_model` sends any completion without tool calls to `END`. A
-completion that stopped because it hit the token limit is treated as if the
-model chose to stop, so a truncated answer reads as a complete one. A
-truncation in the middle of a tool call can also leave its arguments
-incomplete, and `tools_node` would then run the call with them.
+`route_after_model` sent any completion without tool calls to `END`. A
+completion that stopped because it hit the token limit was treated as if the
+model chose to stop, so a truncated answer read as a complete one. A
+truncation in the middle of a tool call could also leave its arguments
+incomplete, and `tools_node` would then have run the call with them.
 
-Fix when: commit 15, since fixing it properly needs `max_tokens` plumbed
-through the provider call (next entry). The router should branch on
-`stop_reason` and treat `max_tokens` as its own outcome, not as success.
+Done in `7afc760`, though not in the router as first planned. `model_node`
+raises `TruncatedResponse`, a `FatalError`, as soon as the provider returns a
+completion with `stop_reason == "max_tokens"`. The truncated completion never
+reaches state or the router, so a half written tool call cannot reach
+`tools_node`, and the run fails rather than retrying a request that would be
+cut off in the same place.
 
 ## `model_node` never passes `max_tokens`
 
-`model_node` calls `ctx.provider.complete` without `max_tokens`, so every run
-uses the provider default of 2048. Callers have no way to raise the limit for
+`model_node` called `ctx.provider.complete` without `max_tokens`, so every run
+used the provider default of 2048. Callers had no way to raise the limit for
 long answers or lower it to cap cost.
 
-Fix when: alongside the `stop_reason` check, since the two interact. Carry
-`max_tokens` on `Runtime` and `RunContext`, and have `model_node` pass it
-through.
+Done in `7afc760`, alongside the `stop_reason` check. `max_tokens` is a field
+on `Runtime` and `RunContext`, and `model_node` passes it through.
 
 ## Tool results on the final step are discarded
 
@@ -94,7 +96,7 @@ retry internally in `AnthropicProvider._post_with_retry`, which meant retries
 the runtime could not see or record, and which would have multiplied with any
 retry the runtime added on top.
 
-Done in commit 15. `Runtime` retries a node that raises `RetryableError`
+Done in `2f6711d`. `Runtime` retries a node that raises `RetryableError`
 according to its `RetryPolicy`. The provider's `max_attempts` and
 `_post_with_retry` were deleted outright rather than set to 1, so the provider
 makes exactly one request per call and the two retry layers cannot stack.
