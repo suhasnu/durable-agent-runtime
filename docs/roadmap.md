@@ -219,3 +219,17 @@ that step number, and `put_checkpoint` now rejects a duplicate step with
 
 Fix when: commit 17, when interrupts land. The interrupt path updates the run
 status only and leaves the checkpoints alone.
+
+## Usage from a node that raises is lost
+
+When a node raises after a successful provider call, the updates it would
+have returned are discarded, and the completion's usage goes with them. The
+run's usage total then understates what was actually spent. Truncation is
+the first case: `model_node` raises `TruncatedResponse` on a completion that
+used its whole `max_tokens` budget, and none of those tokens are counted. Any
+node that raises after the provider returns has the same gap.
+
+Fix when: cost accounting has to be exact. Either attach the usage to the
+exception and have `_drive` unpack it before finishing, or give failing nodes
+a general way to return partial updates. The second is the same question the
+interrupt path raises, so it is worth answering once for both.

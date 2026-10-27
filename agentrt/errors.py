@@ -23,6 +23,23 @@ class FatalError(AgentError):
     """Permanent. Retrying the same call cannot help."""
 
 
+class TruncatedResponse(FatalError):
+    """The model stopped because it hit the token ceiling, mid-sentence.
+
+    Fatal rather than retryable: the same request would be cut off at the same
+    place. Dangerous rather than merely incomplete, because a tool call cut off
+    halfway can still parse, so the arguments that survived would be executed
+    as if the model had asked for them.
+    """
+
+    def __init__(self, max_tokens: int):
+        super().__init__(
+            f"response truncated at max_tokens={max_tokens}; resume this run "
+            f"with a higher limit rather than acting on a partial response"
+        )
+        self.max_tokens = max_tokens
+
+
 class UncertainSideEffect(AgentError):
     """A side-effecting tool started but its outcome was never recorded.
 

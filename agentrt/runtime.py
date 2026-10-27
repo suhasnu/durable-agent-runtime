@@ -50,6 +50,7 @@ class RunContext:
     run_id: str
     checkpointer: SqliteCheckpointer
     system: str | None = None
+    max_tokens: int = 2048
     step: int = 0
     retries: int = 0
 
@@ -87,6 +88,7 @@ class Runtime:
         tools: ToolRegistry | None = None,
         checkpointer: SqliteCheckpointer | None = None,
         system: str | None = None,
+        max_tokens: int = 2048,
         max_steps: int = 20,
         retry: RetryPolicy | None = None,
     ):
@@ -95,6 +97,7 @@ class Runtime:
         self.tools = tools or ToolRegistry()
         self.checkpointer = checkpointer or InMemoryCheckpointer()
         self.system = system
+        self.max_tokens = max_tokens
         self.max_steps = max_steps
         self.retry = retry or RetryPolicy()
 
@@ -192,6 +195,7 @@ class Runtime:
             run_id=run_id,
             checkpointer=self.checkpointer,
             system=self.system,
+            max_tokens=self.max_tokens,
         )
 
         while node != END:

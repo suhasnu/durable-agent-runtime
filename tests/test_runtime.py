@@ -5,9 +5,9 @@ from pydantic import BaseModel
 
 from agentrt.agent import build_agent, tools_node
 from agentrt.checkpoint import InMemoryCheckpointer, SqliteCheckpointer
-from agentrt.errors import FatalError, RetryableError, UncertainSideEffect
+from agentrt.errors import FatalError, RetryableError, TruncatedResponse, UncertainSideEffect
 from agentrt.graph import END, StateGraph
-from agentrt.providers import ScriptedProvider, calls, rate_limited, says
+from agentrt.providers import ScriptedProvider, calls, rate_limited, says, truncated
 from agentrt.runtime import RetryPolicy, Runtime
 from agentrt.state import AgentState, Messages
 from agentrt.tools import ToolRegistry, tool
@@ -779,3 +779,63 @@ def test_a_zero_second_retry_after_is_honoured_not_treated_as_missing(monkeypatc
 
     assert result.status == "completed"
     assert slept == [0.0]
+
+
+def test_max_tokens_reaches_the_provider():
+    provider = ScriptedProvider([says("done")])
+    Runtime(graph=build_agent().compile(), provider=provider, max_tokens=512).run(
+        AgentState(messages=[Message(role="user", content="hi")])
+    )
+
+    assert provider.requests[0]["max_tokens"] == 512
+
+
+def test_a_truncated_answer_fails_the_run():
+    provider = ScriptedProvider([truncated("The answer is that the populat")])
+    result = Runtime(
+        graph=build_agent().compile(),
+        provider=provider,
+        retry=RetryPolicy(initial_delay=0.0),
+    ).run(AgentState(messages=[Message(role="user", content="hi")]))
+
+    assert result.status == "failed", "a cut off answer is not a finished one"
+    assert isinstance(result.error, TruncatedResponse)
+    assert isinstance(result.error, FatalError)
+    assert len(provider.requests) == 1, "the same request would be cut off again"
+    assert [m.role for m in result.state.messages] == ["user"], (
+        "the truncated message never enters state"
+    )
+
+
+def test_a_truncated_tool_call_never_runs_the_tool():
+    charges: list[float] = []
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        charges.append(amount)
+        return f"charged {amount}"
+
+    cp = InMemoryCheckpointer()
+    result = Runtime(
+        graph=build_agent().compile(),
+        provider=ScriptedProvider([truncated(tool_call=("charge_card", {"amount": 4}))]),
+        tools=ToolRegistry([charge_card]),
+        checkpointer=cp,
+    ).run(AgentState(messages=[Message(role="user", content="charge 49")]), run_id="r1")
+
+    assert charges == [], "arguments cut off mid call must never execute"
+    assert cp.get_invocation("r1", "call_1") is None, "not even a started record"
+    assert result.status == "failed"
+    assert isinstance(result.error, TruncatedResponse)
+
+
+def test_a_normal_end_turn_still_completes():
+    result = Runtime(
+        graph=build_agent().compile(),
+        provider=ScriptedProvider([says("done")]),
+        max_tokens=512,
+    ).run(AgentState(messages=[Message(role="user", content="hi")]))
+
+    assert result.status == "completed"
+    assert result.state.messages[-1].content == "done"

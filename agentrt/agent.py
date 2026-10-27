@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .errors import TruncatedResponse
 from .graph import END, StateGraph
 from .runtime import RunContext, execute_tool_calls
 from .state import AgentState
@@ -19,7 +20,10 @@ def model_node(state: AgentState, ctx: RunContext) -> dict[str, Any]:
         messages=state.messages,
         tools=ctx.tools.specs() or None,
         system=ctx.system,
+        max_tokens=ctx.max_tokens,
     )
+    if completion.stop_reason == "max_tokens":
+        raise TruncatedResponse(ctx.max_tokens)
     return {"messages": completion.message, "usage": completion.usage}
 
 

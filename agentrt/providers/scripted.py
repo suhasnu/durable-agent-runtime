@@ -32,7 +32,9 @@ class ScriptedProvider:
         system: str | None = None,
         max_tokens: int = 2048,
     ) -> Completion:
-        self.requests.append({"messages": list(messages), "tools": tools, "system": system})
+        self.requests.append(
+            {"messages": list(messages), "tools": tools, "system": system, "max_tokens": max_tokens}
+        )
         if self._index >= len(self.script):
             raise AssertionError(
                 f"scripted provider exhausted after {self._index} calls; the agent "
@@ -57,6 +59,30 @@ def says(text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> Comple
 def rate_limited(retry_after: float | None = 0.0) -> RetryableError:
     """A transient failure the runtime should retry."""
     return RetryableError("simulated rate limit", retry_after=retry_after)
+
+
+def truncated(
+    text: str = "",
+    *,
+    tool_call: tuple[str, dict[str, Any]] | None = None,
+    call_id: str = "call_1",
+    input_tokens: int = 10,
+    output_tokens: int = 2048,
+) -> Completion:
+    """A completion cut off at the token limit.
+
+    With `tool_call`, the cut lands inside the call, so its arguments are
+    whatever a real provider managed to emit before stopping.
+    """
+    tool_calls = []
+    if tool_call is not None:
+        name, arguments = tool_call
+        tool_calls = [ToolCall(id=call_id, name=name, arguments=arguments)]
+    return Completion(
+        message=Message(role="assistant", content=text, tool_calls=tool_calls),
+        usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),
+        stop_reason="max_tokens",
+    )
 
 
 def calls(
