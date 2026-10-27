@@ -1,12 +1,14 @@
+import time
+
 import pytest
 from pydantic import BaseModel
 
-from agentrt.agent import build_agent
+from agentrt.agent import build_agent, tools_node
 from agentrt.checkpoint import InMemoryCheckpointer, SqliteCheckpointer
-from agentrt.errors import UncertainSideEffect
+from agentrt.errors import FatalError, RetryableError, UncertainSideEffect
 from agentrt.graph import END, StateGraph
-from agentrt.providers import ScriptedProvider, calls, says
-from agentrt.runtime import Runtime
+from agentrt.providers import ScriptedProvider, calls, rate_limited, says
+from agentrt.runtime import RetryPolicy, Runtime
 from agentrt.state import AgentState, Messages
 from agentrt.tools import ToolRegistry, tool
 from agentrt.types import Message
@@ -613,3 +615,161 @@ def test_an_operator_can_resolve_a_dangling_call_and_the_run_continues():
     assert charges == [49.0], "the tool was not run a second time"
     tool_message = next(m for m in resumed.state.messages if m.role == "tool")
     assert "confirmed in the payment log" in tool_message.tool_results[0].content
+
+
+def test_a_retryable_failure_is_retried_and_succeeds():
+    attempts = []
+
+    def flaky(state, ctx):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RetryableError("rate limited", retry_after=0.0)
+        return {"messages": Message(role="assistant", content="worked")}
+
+    g = StateGraph(AgentState)
+    g.add_node("flaky", flaky)
+    g.set_entry("flaky")
+    g.add_edge("flaky", END)
+
+    result = Runtime(
+        graph=g.compile(),
+        provider=ScriptedProvider([]),
+        retry=RetryPolicy(initial_delay=0.0),
+    ).run()
+
+    assert result.status == "completed"
+    assert len(attempts) == 3
+    assert result.retries == 2, "the run reports how many retries it took"
+
+
+def test_a_fatal_failure_is_not_retried():
+    attempts = []
+
+    def broken(state, ctx):
+        attempts.append(1)
+        raise FatalError("bad api key")
+
+    g = StateGraph(AgentState)
+    g.add_node("broken", broken)
+    g.set_entry("broken")
+    g.add_edge("broken", END)
+
+    result = Runtime(
+        graph=g.compile(), provider=ScriptedProvider([]), retry=RetryPolicy(initial_delay=0.0)
+    ).run()
+
+    assert result.status == "failed"
+    assert len(attempts) == 1, "retrying something permanent is just slower failure"
+
+
+def test_retries_are_exhausted_and_the_last_error_is_reported():
+    def always_flaky(state, ctx):
+        raise RetryableError("still rate limited", retry_after=0.0)
+
+    g = StateGraph(AgentState)
+    g.add_node("flaky", always_flaky)
+    g.set_entry("flaky")
+    g.add_edge("flaky", END)
+
+    result = Runtime(
+        graph=g.compile(),
+        provider=ScriptedProvider([]),
+        retry=RetryPolicy(max_attempts=2, initial_delay=0.0),
+    ).run()
+
+    assert result.status == "failed"
+    assert isinstance(result.error, RetryableError)
+    assert result.retries == 1
+
+
+def test_a_retry_does_not_consume_a_step():
+    attempts = []
+
+    def flaky(state, ctx):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RetryableError("transient", retry_after=0.0)
+        return {}
+
+    cp = InMemoryCheckpointer()
+    g = StateGraph(AgentState)
+    g.add_node("flaky", flaky)
+    g.set_entry("flaky")
+    g.add_edge("flaky", END)
+
+    result = Runtime(
+        graph=g.compile(),
+        provider=ScriptedProvider([]),
+        checkpointer=cp,
+        retry=RetryPolicy(initial_delay=0.0),
+    ).run(run_id="r1")
+
+    assert result.steps == 1, "three attempts at one node is still one step"
+    assert [h["step"] for h in cp.history("r1")] == [0, 1]
+
+
+def test_retrying_a_tools_node_replays_rather_than_repeating():
+    """The write-ahead log makes node-level retry safe for side effects."""
+    charges: list[float] = []
+    model_attempts = []
+
+    @tool(side_effecting=True)
+    def charge_card(amount: float) -> str:
+        """Charge the customer's card."""
+        charges.append(amount)
+        return f"charged {amount}"
+
+    def flaky_model(state, ctx):
+        model_attempts.append(1)
+        if not state.messages or state.messages[-1].role != "tool":
+            return {"messages": calls("charge_card", {"amount": 49.0}).message}
+        if len(model_attempts) < 4:
+            raise RetryableError("transient", retry_after=0.0)
+        return {"messages": Message(role="assistant", content="done")}
+
+    cp = InMemoryCheckpointer()
+    registry = ToolRegistry([charge_card])
+
+    g = StateGraph(AgentState)
+    g.add_node("model", flaky_model)
+    g.add_node("tools", tools_node)
+    g.set_entry("model")
+    g.add_conditional_edge(
+        "model", lambda s: "tools" if s.messages[-1].tool_calls else END, {"tools", END}
+    )
+    g.add_edge("tools", "model")
+
+    result = Runtime(
+        graph=g.compile(),
+        provider=ScriptedProvider([]),
+        tools=registry,
+        checkpointer=cp,
+        retry=RetryPolicy(initial_delay=0.0),
+    ).run(AgentState(messages=[Message(role="user", content="go")]), run_id="r1")
+
+    assert result.status == "completed"
+    assert charges == [49.0], "the card was charged once despite the retries"
+
+def test_a_retry_policy_must_allow_at_least_one_attempt():
+    """max_attempts=0 would skip the loop body entirely and fail the run with
+    AssertionError instead of ever calling the node."""
+    with pytest.raises(ValueError):
+        RetryPolicy(max_attempts=0)
+
+
+def test_a_zero_second_retry_after_is_honoured_not_treated_as_missing(monkeypatch):
+    """`retry_after or delay` would fall back to the backoff delay, because 0.0
+    is falsy. A server saying "retry now" should be taken at its word."""
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+
+    provider = ScriptedProvider([rate_limited(retry_after=0.0), says("done")])
+    runtime = Runtime(
+        graph=build_agent().compile(),
+        provider=provider,
+        retry=RetryPolicy(max_attempts=2, initial_delay=5.0),
+    )
+    result = runtime.run(AgentState(messages=[Message(role="user", content="hi")]))
+
+    assert result.status == "completed"
+    assert slept == [0.0]

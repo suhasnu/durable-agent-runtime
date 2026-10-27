@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..errors import RetryableError
 from ..types import Completion, Message, ToolCall, Usage
 
 
@@ -51,6 +52,10 @@ def says(text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> Comple
         usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),
         stop_reason="end_turn",
     )
+
+def rate_limited(retry_after: float | None = 0.0) -> RetryableError:
+    """A transient failure the runtime should retry."""
+    return RetryableError("simulated rate limit", retry_after=retry_after)
 
 
 def calls(

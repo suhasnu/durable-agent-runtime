@@ -89,13 +89,39 @@ the error classification gets its own tests for `URLError` causes.
 
 ## Retry moves from the provider to the runtime
 
-Decision: the provider classifies, the runtime retries. Today
-`AnthropicProvider._post_with_retry` retries internally, which means retries
-the runtime cannot see or record, and which would multiply with any retry the
-runtime adds on top.
+Decision: the provider classifies, the runtime retries. The provider used to
+retry internally in `AnthropicProvider._post_with_retry`, which meant retries
+the runtime could not see or record, and which would have multiplied with any
+retry the runtime added on top.
 
-Fix when: commit 15. In the same commit, the provider's `max_attempts` is set
-to 1 so the two retry layers can never stack.
+Done in commit 15. `Runtime` retries a node that raises `RetryableError`
+according to its `RetryPolicy`. The provider's `max_attempts` and
+`_post_with_retry` were deleted outright rather than set to 1, so the provider
+makes exactly one request per call and the two retry layers cannot stack.
+
+## The retry count does not survive a resume
+
+`_run_node_with_retry` counts retries on `RunContext.retries`, which lives
+only in memory and is not stored in the checkpoint. A resumed run starts the
+count again at zero, so its `RunResult.retries` covers only the retries made
+since the resume, not the whole run.
+
+Fix when: something reads the retry count across a resume, for example a
+trace viewer or a retry budget. Store the count on each checkpoint, or record
+each retry as its own row so the total can be derived.
+
+## `max_delay` can cut a server's `Retry-After` short
+
+The runtime sleeps for `min(wait, max_delay)`, and `wait` is the server's
+`Retry-After` when one is given. If `max_delay` is set below what the server
+asked for, the next attempt arrives early and is likely to be rate limited
+again, wasting an attempt. With the defaults nothing changes, because
+`_parse_retry_after` already caps the header at 30 seconds and `max_delay` is
+also 30.
+
+Fix when: a caller lowers `max_delay`, or retries start failing on repeated
+429s. Either honour `Retry-After` in full, up to the provider's own cap, or
+fail fast when the server asks for longer than `max_delay` allows.
 
 ## `apply_updates` copies the whole state on every step
 

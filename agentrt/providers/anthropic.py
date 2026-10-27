@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -30,13 +29,9 @@ class AnthropicProvider:
         model: str = "claude-haiku-5-5",
         api_key: str | None = None,
         timeout: float = 120.0,
-        max_attempts: int = 4,
     ):
-        if max_attempts < 1:
-          raise ValueError("max_attempts must be at least 1")
         self.model = model
         self.timeout = timeout
-        self.max_attempts = max_attempts
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not self._api_key:
             raise FatalError("ANTHROPIC_API_KEY is not set")
@@ -58,21 +53,8 @@ class AnthropicProvider:
         if tools:
             body["tools"] = tools
 
-        return _from_wire(self._post_with_retry(body))
+        return _from_wire(self._post(body))
 
-    def _post_with_retry(self, body: dict[str, Any]) -> dict[str, Any]:
-        delay = 1.0
-        last: Exception | None = None
-        for attempt in range(self.max_attempts):
-            try:
-                return self._post(body)
-            except RetryableError as exc:
-                last = exc
-                if attempt == self.max_attempts - 1:
-                    break
-                time.sleep(exc.retry_after or delay)
-                delay *= 2
-        raise last
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(

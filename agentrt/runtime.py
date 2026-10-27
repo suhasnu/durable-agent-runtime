@@ -8,19 +8,37 @@ terminal status, completed or failed.
 from __future__ import annotations
 
 import contextlib
+import time
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
-from .errors import FatalError, UncertainSideEffect
+from .errors import FatalError, RetryableError, UncertainSideEffect
 from .graph import END, CompiledGraph
 from .providers.base import Provider
 from .state import apply_updates
 from .tools import InvalidToolArguments, ToolNotFound, ToolRegistry
 from .types import Message, ToolCall, ToolResult, new_id
 
+
+@dataclass
+class RetryPolicy:
+    """How a node retries after a transient failure.
+
+    Retrying lives here rather than in the provider so that attempts are
+    visible to the run, and so the two layers cannot multiply.
+    """
+
+    max_attempts: int = 3
+    initial_delay: float = 1.0
+    max_delay: float = 30.0
+    backoff: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
 
 @dataclass
 class RunContext:
@@ -32,6 +50,7 @@ class RunContext:
     checkpointer: SqliteCheckpointer
     system: str | None = None
     step: int = 0
+    retries: int = 0
 
 
 RunStatus = Literal["completed", "failed"]
@@ -44,6 +63,7 @@ class RunResult:
     state: BaseModel
     steps: int
     error: Exception | None = None
+    retries: int = 0
     history: list[str] = field(default_factory=list)
 
     @property
@@ -67,6 +87,7 @@ class Runtime:
         checkpointer: SqliteCheckpointer | None = None,
         system: str | None = None,
         max_steps: int = 20,
+        retry: RetryPolicy | None = None,
     ):
         self.graph = graph
         self.provider = provider
@@ -74,6 +95,7 @@ class Runtime:
         self.checkpointer = checkpointer or InMemoryCheckpointer()
         self.system = system
         self.max_steps = max_steps
+        self.retry = retry or RetryPolicy()
 
     def run(self, initial: BaseModel | None = None, run_id: str | None = None) -> RunResult:
         state = initial if initial is not None else self.graph.state_type()
@@ -86,6 +108,26 @@ class Runtime:
             Checkpoint(run_id=run_id, step=0, next_node=self.graph.entry, state=state)
         )
         return self._drive(run_id, state, self.graph.entry, step=0)
+
+    def _run_node_with_retry(self, node: str, state: BaseModel, ctx: RunContext) -> dict[str, Any]:
+        """Run a node, retrying transient failures.
+
+        Retrying a node is safe even when it has side effects: the write-ahead
+        log replays completed tool calls from the previous attempt instead of
+        executing them again.
+        """
+        delay = self.retry.initial_delay
+        for attempt in range(1, self.retry.max_attempts + 1):
+            try:
+                return self.graph.node(node)(state, ctx) or {}
+            except RetryableError as exc:
+                if attempt == self.retry.max_attempts:
+                    raise
+                ctx.retries += 1
+                wait = exc.retry_after if exc.retry_after is not None else delay
+                time.sleep(min(wait, self.retry.max_delay))
+                delay = min(delay * self.retry.backoff, self.retry.max_delay)
+        raise AssertionError("unreachable")
 
     def resume(self, run_id: str) -> RunResult:
         """Continue a run from its last checkpoint.
@@ -154,7 +196,7 @@ class Runtime:
         while node != END:
             if step >= self.max_steps:
                 error = RuntimeError(f"agent did not finish within {self.max_steps} steps")
-                return self._finish(run_id, "failed", state, step, history, error)
+                return self._finish(run_id, "failed", state, step, history, error, ctx.retries)
 
             ctx.step = step + 1
             history.append(node)
@@ -163,7 +205,7 @@ class Runtime:
             # write that raises would otherwise escape and leave the run marked
             # "running" forever, which is indistinguishable from a paused run.
             try:
-                updates = self.graph.node(node)(state, ctx) or {}
+                updates = self._run_node_with_retry(node, state, ctx)
                 step += 1
                 state = apply_updates(state, updates)
 
@@ -176,11 +218,11 @@ class Runtime:
                     Checkpoint(run_id=run_id, step=step, next_node=next_node, state=state)
                 )
             except Exception as exc:  # noqa: BLE001 - classification is the caller's job
-                return self._finish(run_id, "failed", state, step, history, exc)
+                return self._finish(run_id, "failed", state, step, history, exc, ctx.retries)
 
             node = next_node
 
-        return self._finish(run_id, "completed", state, step, history)
+        return self._finish(run_id, "completed", state, step, history, retries=ctx.retries)
 
     def _finish(
         self,
@@ -190,13 +232,20 @@ class Runtime:
         step: int,
         history: list[str],
         error: Exception | None = None,
+        retries: int = 0,
     ) -> RunResult:
         # If the store is what broke, recording the status will break too, and
         # the caller needs the error that caused the failure, not this one.
         with contextlib.suppress(Exception):
             self.checkpointer.set_run_status(run_id, status)
         return RunResult(
-            run_id=run_id, status=status, state=state, steps=step, error=error, history=history
+            run_id=run_id,
+            status=status,
+            state=state,
+            steps=step,
+            error=error,
+            history=history,
+            retries=retries,
         )
 
 def execute_tool_calls(ctx: RunContext, calls: list[ToolCall]) -> list[ToolResult]:
