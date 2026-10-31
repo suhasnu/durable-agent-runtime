@@ -1,6 +1,6 @@
 [project]
 name = "agentrt"
-version = "0.1.0"
+version = "1.0.0"
 description = "An agent runtime with durable execution, built from scratch"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0"]
@@ -22,6 +22,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]

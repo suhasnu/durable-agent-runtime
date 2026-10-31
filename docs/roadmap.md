@@ -1,7 +1,9 @@
 # Roadmap
 
 Known gaps that were deferred on purpose. Each one is small today and becomes
-a real problem once a specific feature lands.
+a real problem once a specific feature lands. Closed entries are kept at the
+bottom rather than deleted, because why a gap was acceptable for a while is
+part of the record.
 
 ## Scripted provider stores shallow copies
 
@@ -16,50 +18,16 @@ Fix when: the loop starts mutating message history, or tests start asserting on
 the request log in detail. Options are `model_copy(deep=True)` on record and
 return, or frozen pydantic models.
 
-## Parallel tool calls in `calls()`
-
-`calls()` builds a completion with exactly one `ToolCall`. Providers can return
-several tool calls in one turn, and the loop will need to execute them and
-return all results before the next completion.
-
-Done in `5f13060`. `calls()` still makes one call, and `calls_many()` takes a
-list of `(name, arguments)` pairs and numbers their ids from `start`, so a
-script with several tool calling turns can keep ids unique. `test_agent.py`
-covers a turn with several calls.
-
 ## mypy for Protocol conformance
 
 Nothing checks that `ScriptedProvider` satisfies `Provider`. Because `Provider`
 is a structural `Protocol`, a signature drift in either one fails silently until
 a real call breaks.
 
-Fix when: a second provider exists, or before CI is set up. Add mypy (or
-pyright) to dev dependencies and CI, plus a static assignment such as
-`_: Provider = ScriptedProvider([])` so the check has something to verify.
-
-## The agent graph never checks `stop_reason`
-
-`route_after_model` sent any completion without tool calls to `END`. A
-completion that stopped because it hit the token limit was treated as if the
-model chose to stop, so a truncated answer read as a complete one. A
-truncation in the middle of a tool call could also leave its arguments
-incomplete, and `tools_node` would then have run the call with them.
-
-Done in `7afc760`, though not in the router as first planned. `model_node`
-raises `TruncatedResponse`, a `FatalError`, as soon as the provider returns a
-completion with `stop_reason == "max_tokens"`. The truncated completion never
-reaches state or the router, so a half written tool call cannot reach
-`tools_node`, and the run fails rather than retrying a request that would be
-cut off in the same place.
-
-## `model_node` never passes `max_tokens`
-
-`model_node` called `ctx.provider.complete` without `max_tokens`, so every run
-used the provider default of 2048. Callers had no way to raise the limit for
-long answers or lower it to cap cost.
-
-Done in `7afc760`, alongside the `stop_reason` check. `max_tokens` is a field
-on `Runtime` and `RunContext`, and `model_node` passes it through.
+Fix when: a third provider is written, or a provider signature changes. CI
+already runs the tests and ruff, so adding mypy (or pyright) there is a small
+step. It needs a static assignment such as `_: Provider = ScriptedProvider([])`
+so the check has something to verify.
 
 ## Tool results on the final step are discarded
 
@@ -68,18 +36,13 @@ executed, side effects included, but the runtime raises the step limit error
 before `model_node` runs again. The results never reach the model. The work
 happened, but nothing downstream knows it did.
 
-This is the side effect problem that commits 13 and 14 address.
+The write-ahead log records that the tools ran, so nothing is lost or repeated,
+but a run can still stop at the one point where the work it paid for is thrown
+away.
 
-## `max_steps` counts node executions, not model turns
-
-The old loop counted one step per model turn. `Runtime` counts every node it
-runs, and one tool calling round is `model` then `tools`, so the same
-`max_steps` allows about half as many model calls as before.
-
-Done in `b2b9cde`, by adding a separate limit rather than changing this one.
-`max_steps` still counts nodes, as a guard against runaway graphs, and
-`Budget.max_model_calls` counts model turns, checked in `model_node` before
-each call. `Budget.max_total_tokens` caps tokens the same way.
+Fix when: a run hitting its limit has to be worth resuming. The fix is to stop
+on the step limit before the model call rather than after `tools_node`, so the
+run pauses where continuing is useful.
 
 ## SSL certificate failures are classified as retryable
 
@@ -92,18 +55,6 @@ deferred.
 
 Fix when: a misconfigured environment wastes a run on pointless retries, or
 the error classification gets its own tests for `URLError` causes.
-
-## Retry moves from the provider to the runtime
-
-Decision: the provider classifies, the runtime retries. The provider used to
-retry internally in `AnthropicProvider._post_with_retry`, which meant retries
-the runtime could not see or record, and which would have multiplied with any
-retry the runtime added on top.
-
-Done in `2f6711d`. `Runtime` retries a node that raises `RetryableError`
-according to its `RetryPolicy`. The provider's `max_attempts` and
-`_post_with_retry` were deleted outright rather than set to 1, so the provider
-makes exactly one request per call and the two retry layers cannot stack.
 
 ## The retry count does not survive a resume
 
@@ -159,17 +110,23 @@ Fix when: someone names a node that way, or the diagram is rendered somewhere
 automatically. Emit generated ids such as `n0`, `n1` and put the node name in
 the label.
 
-## Each checkpointer statement is its own transaction
+## Only one pair of writes is worth making atomic
 
 `SqliteCheckpointer` opens its connection with `isolation_level=None`, so every
-statement commits on its own. That is fine while each write is a single
-statement. Commit 13 needs a checkpoint write and a run status update to
-commit together or not at all, and today a crash between the two leaves them
-disagreeing.
+statement commits on its own. For the write-ahead log that is not a shortcoming,
+it is the design: `begin_invocation` has to commit by itself, before the tool
+runs, or the `started` record is not on disk when the process dies. Wrapping the
+invocation writes in a wider transaction would destroy the property the whole
+runtime exists for, so they must stay separate.
 
-Fix when: commit 13. Add an explicit transaction helper, for example a context
-manager that issues `BEGIN` and then `COMMIT` or `ROLLBACK`, and route both
-writes through it.
+The one pair worth grouping is a checkpoint write and the run status update that
+follows it, where a crash between the two leaves them disagreeing. The stakes
+are low: a disagreement there costs an inaccurate status, not a repeated effect.
+
+Fix when: a reader starts trusting the run status without looking at the
+checkpoints. Add an explicit transaction helper, a context manager issuing
+`BEGIN` and then `COMMIT` or `ROLLBACK`, and route only those two writes
+through it.
 
 ## Two processes can drive the same run
 
@@ -221,19 +178,6 @@ supports.
 Fix when: a second thread touches the checkpointer, for example a live trace
 viewer. Open a connection per reader, or guard the shared one with a lock.
 
-## The interrupt path must not write a checkpoint
-
-When a run is interrupted before a node, the checkpoint from the previous
-transition already records that node as `next_node`, so it is already the
-correct resume point. Writing another checkpoint on the interrupt would reuse
-that step number, and `put_checkpoint` now rejects a duplicate step with
-`IntegrityError`.
-
-Done in `feat: pause a run for human input`. A node raises `Interrupt`, and
-`_drive` sets the run to `paused` and returns without writing a checkpoint.
-`resume(run_id, value)` re-enters the same node at the same step, so no step
-number is reused.
-
 ## Usage from a node that raises is lost
 
 When a node raises after a successful provider call, the updates it would
@@ -282,13 +226,15 @@ re-enter instead of refusing.
 The payload reaches the caller only through the `RunResult` that `run` or
 `resume` returns. Nothing writes it to the database. If the process dies while
 a run is paused, a new process can still resume the run, since its status is
-`paused` and its last checkpoint points at the node that asked, but it cannot
-find out what the question was.
+`paused` and its last checkpoint points at the node that asked, but the result
+it gets back is the payload raised a second time rather than one read from
+storage, so a caller that wants the question without re-entering the node has
+nowhere to read it from.
 
-Fix when: a paused run has to survive a restart before anyone answers it, for
-example an approval that waits overnight. Store the payload on the `runs` row
-when the status becomes `paused`, and clear it on resume. That keeps the rule
-that pausing writes no checkpoint.
+Fix when: something needs the pending question without driving the run, for
+example a queue of approvals waiting overnight. Store the payload on the `runs`
+row when the status becomes `paused`, and clear it on resume. That keeps the
+rule that pausing writes no checkpoint.
 
 ## `None` cannot be a resume value
 
@@ -301,3 +247,75 @@ for a run that is not paused has the same blind spot, since it checks
 Fix when: an answer can legitimately be `None`, for example "no preference".
 Use a sentinel default on `resume` and expose `ctx.resuming` as a separate
 flag, so the answer and whether there is one stop being the same field.
+
+# Closed
+
+## Parallel tool calls in `calls()`
+
+`calls()` built a completion with exactly one `ToolCall`. Providers can return
+several tool calls in one turn, and the loop had to execute them and return all
+results before the next completion.
+
+Done in `5f13060`. `calls()` still makes one call, and `calls_many()` takes a
+list of `(name, arguments)` pairs and numbers their ids from `start`, so a
+script with several tool calling turns can keep ids unique. `test_agent.py`
+covers a turn with several calls.
+
+## The agent graph never checks `stop_reason`
+
+`route_after_model` sent any completion without tool calls to `END`. A
+completion that stopped because it hit the token limit was treated as if the
+model chose to stop, so a truncated answer read as a complete one. A
+truncation in the middle of a tool call could also leave its arguments
+incomplete, and `tools_node` would then have run the call with them.
+
+Done in `7afc760`, though not in the router as first planned. `model_node`
+raises `TruncatedResponse`, a `FatalError`, as soon as the provider returns a
+completion with `stop_reason == "max_tokens"`. The truncated completion never
+reaches state or the router, so a half written tool call cannot reach
+`tools_node`, and the run fails rather than retrying a request that would be
+cut off in the same place.
+
+## `model_node` never passes `max_tokens`
+
+`model_node` called `ctx.provider.complete` without `max_tokens`, so every run
+used the provider default of 2048. Callers had no way to raise the limit for
+long answers or lower it to cap cost.
+
+Done in `7afc760`, alongside the `stop_reason` check. `max_tokens` is a field
+on `Runtime` and `RunContext`, and `model_node` passes it through.
+
+## `max_steps` counts node executions, not model turns
+
+The old loop counted one step per model turn. `Runtime` counts every node it
+runs, and one tool calling round is `model` then `tools`, so the same
+`max_steps` allows about half as many model calls as before.
+
+Done in `b2b9cde`, by adding a separate limit rather than changing this one.
+`max_steps` still counts nodes, as a guard against runaway graphs, and
+`Budget.max_model_calls` counts model turns, checked in `model_node` before
+each call. `Budget.max_total_tokens` caps tokens the same way.
+
+## Retry moves from the provider to the runtime
+
+Decision: the provider classifies, the runtime retries. The provider used to
+retry internally in `AnthropicProvider._post_with_retry`, which meant retries
+the runtime could not see or record, and which would have multiplied with any
+retry the runtime added on top.
+
+Done in `2f6711d`. `Runtime` retries a node that raises `RetryableError`
+according to its `RetryPolicy`. The provider's `max_attempts` and
+`_post_with_retry` were deleted outright rather than set to 1, so the provider
+makes exactly one request per call and the two retry layers cannot stack.
+
+## The interrupt path must not write a checkpoint
+
+When a run is interrupted before a node, the checkpoint from the previous
+transition already records that node as `next_node`, so it is already the
+correct resume point. Writing another checkpoint on the interrupt would reuse
+that step number, and `put_checkpoint` rejects a duplicate step with
+`IntegrityError`.
+
+Done in `9a3f0fe`. A node raises `Interrupt`, and `_drive` sets the run to
+`paused` and returns without writing a checkpoint. `resume(run_id, value)`
+re-enters the same node at the same step, so no step number is reused.

@@ -2,8 +2,10 @@
 
 [![ci](https://github.com/suhasnu/durable-agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/suhasnu/durable-agent-runtime/actions/workflows/ci.yml)
 
-An agent runtime with durable execution, written from scratch. No LangGraph, no
-CrewAI. The dependencies are pydantic and the standard library's SQLite.
+An agent runtime with durable execution, written from scratch. The runtime
+itself uses no framework: pydantic and the standard library's SQLite are its
+only dependencies. The same agent is then built a second time on LangGraph, in
+one file, so the two designs can be compared rather than argued about.
 
 ## The problem
 
@@ -112,11 +114,18 @@ pytest
 
 The test suite runs against a scripted provider rather than a live API. A suite
 that needs a key and a network is not a test suite, it is a monitoring system,
-and it gets skipped within a month. All 126 tests run offline. Five more cover
-the LangGraph port and run when `.[langgraph]` is installed, otherwise they skip.
+and it gets skipped within a month. All 126 tests run offline.
+
+Five more cover the LangGraph port and skip unless it is installed:
+
+```
+pip install -e ".[dev,langgraph]"
+pytest
+python examples/langgraph_port.py
+```
 
 For a real call against the Anthropic API, set `ANTHROPIC_API_KEY` and run
-`python examples/live.py`.
+`python examples/live.py "your question"`, or `--chat` to keep asking.
 
 ## What is in it
 
