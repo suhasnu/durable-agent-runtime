@@ -1,8 +1,8 @@
 """The executor.
 
 Drives a compiled graph: run a node, apply its updates, work out what's next,
-checkpoint, repeat. Every run leaves a checkpoint per transition and ends in a
-terminal status, completed or failed.
+checkpoint, repeat. Every run leaves a checkpoint per transition and either
+ends in completed or failed, or stops at paused until it is resumed.
 """
 
 from __future__ import annotations
@@ -15,7 +15,13 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .checkpoint import Checkpoint, InMemoryCheckpointer, SqliteCheckpointer, hash_args
-from .errors import BudgetExceeded, FatalError, RetryableError, UncertainSideEffect
+from .errors import (
+    BudgetExceeded,
+    FatalError,
+    Interrupt,
+    RetryableError,
+    UncertainSideEffect,
+)
 from .graph import END, CompiledGraph
 from .providers.base import Provider
 from .state import apply_updates
@@ -78,11 +84,12 @@ class RunContext:
     system: str | None = None
     max_tokens: int = 2048
     budget: Budget = field(default_factory=Budget)
+    resume_value: Any = None
     step: int = 0
     retries: int = 0
 
 
-RunStatus = Literal["completed", "failed"]
+RunStatus = Literal["completed", "paused", "failed", "needs_resolution"]
 
 
 @dataclass
@@ -92,6 +99,7 @@ class RunResult:
     state: BaseModel
     steps: int
     error: Exception | None = None
+    interrupt: Any = None
     retries: int = 0
     history: list[str] = field(default_factory=list)
 
@@ -162,16 +170,27 @@ class Runtime:
                 delay = min(delay * self.retry.backoff, self.retry.max_delay)
         raise AssertionError("unreachable")
 
-    def resume(self, run_id: str) -> RunResult:
+    def resume(self, run_id: str, value: Any = None) -> RunResult:
         """Continue a run from its last checkpoint.
 
         Everything comes from the checkpoint row: the state, the step, and the
         node to run next. Nothing is taken from this Runtime object, which is
         what lets a fresh process pick up a run the previous one died in.
+
+        `value` answers an interrupt. It reaches the first node only, the one
+        that asked, and is cleared before the run moves on.
         """
         checkpoint = self.checkpointer.latest_checkpoint(run_id, self.graph.state_type)
         if checkpoint is None:
             raise KeyError(f"no checkpoint for run {run_id!r}")
+
+        # Checked before the status is overwritten, so a refused resume leaves
+        # the run exactly as it was. Without it a value meant for a question
+        # would reach whatever node happened to run next.
+        if value is not None and self.checkpointer.run_status(run_id) != "paused":
+            raise ValueError(
+                f"run {run_id!r} is not paused, so there is no question for this value to answer"
+            )
 
         if checkpoint.next_node == END:
             # Already finished. Flipping the status to running and back would
@@ -186,7 +205,13 @@ class Runtime:
         self._reconcile_dangling(run_id)
 
         self.checkpointer.set_run_status(run_id, "running")
-        return self._drive(run_id, checkpoint.state, checkpoint.next_node, step=checkpoint.step)
+        return self._drive(
+            run_id,
+            checkpoint.state,
+            checkpoint.next_node,
+            step=checkpoint.step,
+            resume_value=value,
+        )
 
     def _reconcile_dangling(self, run_id: str) -> None:
         """Decide what to do about tools that started and never reported back.
@@ -216,7 +241,14 @@ class Runtime:
             self.checkpointer.set_run_status(run_id, "needs_resolution")
             raise UncertainSideEffect(record.tool_name, record.call_id)
 
-    def _drive(self, run_id: str, state: BaseModel, node: str, step: int) -> RunResult:
+    def _drive(
+        self,
+        run_id: str,
+        state: BaseModel,
+        node: str,
+        step: int,
+        resume_value: Any = None,
+    ) -> RunResult:
         history: list[str] = []
         ctx = RunContext(
             provider=self.provider,
@@ -226,6 +258,7 @@ class Runtime:
             system=self.system,
             max_tokens=self.max_tokens,
             budget=self.budget,
+            resume_value=resume_value,
         )
 
         while node != END:
@@ -252,10 +285,26 @@ class Runtime:
                 self.checkpointer.put_checkpoint(
                     Checkpoint(run_id=run_id, step=step, next_node=next_node, state=state)
                 )
+            except Interrupt as interrupt:
+                # No checkpoint. The previous transition's row already holds the
+                # state before this node ran and already points at this node, so
+                # resume re-enters it with resume_value set and the node handles
+                # both the asking and the answering path. Nothing the node did
+                # before raising is kept, which is why the check belongs first.
+                return self._finish(
+                    run_id,
+                    "paused",
+                    state,
+                    step,
+                    history,
+                    retries=ctx.retries,
+                    interrupt=interrupt.payload,
+                )
             except Exception as exc:  # noqa: BLE001 - classification is the caller's job
                 return self._finish(run_id, "failed", state, step, history, exc, ctx.retries)
 
             node = next_node
+            ctx.resume_value = None
 
         return self._finish(run_id, "completed", state, step, history, retries=ctx.retries)
 
@@ -268,6 +317,7 @@ class Runtime:
         history: list[str],
         error: Exception | None = None,
         retries: int = 0,
+        interrupt: Any = None,
     ) -> RunResult:
         # If the store is what broke, recording the status will break too, and
         # the caller needs the error that caused the failure, not this one.
@@ -281,6 +331,7 @@ class Runtime:
             error=error,
             history=history,
             retries=retries,
+            interrupt=interrupt,
         )
 
 

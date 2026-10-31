@@ -22,8 +22,10 @@ return, or frozen pydantic models.
 several tool calls in one turn, and the loop will need to execute them and
 return all results before the next completion.
 
-Fix when: the agent loop handles more than one tool call per turn. Likely shape
-is a helper that takes several `(name, arguments, call_id)` entries.
+Done in `5f13060`. `calls()` still makes one call, and `calls_many()` takes a
+list of `(name, arguments)` pairs and numbers their ids from `start`, so a
+script with several tool calling turns can keep ids unique. `test_agent.py`
+covers a turn with several calls.
 
 ## mypy for Protocol conformance
 
@@ -74,8 +76,10 @@ The old loop counted one step per model turn. `Runtime` counts every node it
 runs, and one tool calling round is `model` then `tools`, so the same
 `max_steps` allows about half as many model calls as before.
 
-Fix when: a run hits the limit sooner than its author expected, or budgets
-move to commit 16 and can count model turns, tokens or nodes separately.
+Done in `b2b9cde`, by adding a separate limit rather than changing this one.
+`max_steps` still counts nodes, as a guard against runaway graphs, and
+`Budget.max_model_calls` counts model turns, checked in `model_node` before
+each call. `Budget.max_total_tokens` caps tokens the same way.
 
 ## SSL certificate failures are classified as retryable
 
@@ -219,8 +223,10 @@ correct resume point. Writing another checkpoint on the interrupt would reuse
 that step number, and `put_checkpoint` now rejects a duplicate step with
 `IntegrityError`.
 
-Fix when: commit 17, when interrupts land. The interrupt path updates the run
-status only and leaves the checkpoints alone.
+Done in `feat: pause a run for human input`. A node raises `Interrupt`, and
+`_drive` sets the run to `paused` and returns without writing a checkpoint.
+`resume(run_id, value)` re-enters the same node at the same step, so no step
+number is reused.
 
 ## Usage from a node that raises is lost
 
@@ -235,3 +241,32 @@ Fix when: cost accounting has to be exact. Either attach the usage to the
 exception and have `_drive` unpack it before finishing, or give failing nodes
 a general way to return partial updates. The second is the same question the
 interrupt path raises, so it is worth answering once for both.
+
+## A node's work before an interrupt runs again on resume
+
+A node that raises `Interrupt` keeps none of its updates, and resume re-enters
+it from the top. Anything it did before the raise happens a second time. Tool
+calls are safe, because the write-ahead log replays them, but nothing else is
+logged, so a model call made before the raise is paid for twice and any other
+side effect is repeated.
+
+Fix when: a node needs to do real work before it asks. Until then the interrupt
+check belongs at the top of the node, before anything that costs money or
+changes the world.
+
+## A tool cannot interrupt a run
+
+`execute_tool_calls` catches every exception a tool raises and turns it into an
+error result, `Interrupt` included. A tool that asks a question does not pause
+the run. The model gets back an error saying the run was interrupted.
+
+Letting `Interrupt` propagate is not enough by itself. By then
+`begin_invocation` has committed a `started` record with no `completed` record,
+which is exactly what a crash mid-tool leaves behind. On resume
+`_reconcile_dangling` cannot tell the two apart, so it refuses a side-effecting
+tool with `UncertainSideEffect`, even though this time the outcome is known.
+
+Fix when: a tool needs to ask a human mid-call, for example to approve a
+payment. First decide what the write-ahead log holds for a call that paused
+rather than failed, for example a `paused` status that reconciliation knows to
+re-enter instead of refusing.

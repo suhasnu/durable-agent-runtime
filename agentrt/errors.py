@@ -23,6 +23,19 @@ class FatalError(AgentError):
     """Permanent. Retrying the same call cannot help."""
 
 
+class Interrupt(AgentError):
+    """A node pausing the run to wait for a human.
+
+    Neither retryable nor fatal, because nothing failed. The runtime stops,
+    marks the run paused, and hands `payload` to the caller. Resuming with a
+    value re-enters the node that raised, with the value on `ctx.resume_value`.
+    """
+
+    def __init__(self, payload: object = None):
+        super().__init__("run interrupted, awaiting resume value")
+        self.payload = payload
+
+
 class BudgetExceeded(FatalError):
     """The run would exceed a ceiling the caller set.
 
