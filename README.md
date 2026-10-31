@@ -98,6 +98,11 @@ through. The status update simply ran again, because its author
 declared that safe. The runtime never guessed either way.
 ```
 
+The same crash against a LangGraph port of the agent charges the card twice.
+[docs/langgraph-crash.md](docs/langgraph-crash.md) records what happened, and
+[docs/comparison.md](docs/comparison.md) covers what LangGraph does and does
+not do compared with this design.
+
 ## Quick start
 
 ```
