@@ -178,7 +178,9 @@ process is still driving. Both execute the same node, the slower one hits
 `IntegrityError` on the duplicate step, and its `_finish` then overwrites the
 winner's `completed` with `failed`. The node's side effects also happen twice.
 
-Fix when: phase 6. Take a lease on the run with a compare and set,
+Fix when: more than one process can resume runs, for example a worker pool, or
+a scheduler that retries runs it thinks are stuck. Take a lease on the run with
+a compare and set,
 `UPDATE runs SET status='running' ... WHERE run_id=? AND status != 'running'`,
 and refuse to resume when no row changes. That alone would strand a run whose
 driver was killed, since it stays `running` forever, so the same change needs a
@@ -190,9 +192,13 @@ way to recover it, for example a lease that expires or an explicit force.
 that failed at its step limit fails again immediately on resume, even from a
 fresh `Runtime`, and there is no way to give it more budget.
 
-Fix when: commit 16, alongside the other budget changes. Either make budgets
-per attempt, counted from the step a resume starts at, or accept
-`resume(run_id, max_steps=...)`.
+The budget work in `b2b9cde` added `Budget` without changing this, and
+`Budget` has the same problem: usage is read from the checkpointed state, so a
+run resumed after `BudgetExceeded` is refused again by the same check.
+
+Fix when: someone needs to continue a run that hit a limit. Either make limits
+per attempt, counted from where a resume starts, or accept new limits on
+`resume`, for example `resume(run_id, max_steps=..., budget=...)`.
 
 ## Checkpoints carry no schema version
 
@@ -270,3 +276,28 @@ Fix when: a tool needs to ask a human mid-call, for example to approve a
 payment. First decide what the write-ahead log holds for a call that paused
 rather than failed, for example a `paused` status that reconciliation knows to
 re-enter instead of refusing.
+
+## An interrupt's payload is not stored
+
+The payload reaches the caller only through the `RunResult` that `run` or
+`resume` returns. Nothing writes it to the database. If the process dies while
+a run is paused, a new process can still resume the run, since its status is
+`paused` and its last checkpoint points at the node that asked, but it cannot
+find out what the question was.
+
+Fix when: a paused run has to survive a restart before anyone answers it, for
+example an approval that waits overnight. Store the payload on the `runs` row
+when the status becomes `paused`, and clear it on resume. That keeps the rule
+that pausing writes no checkpoint.
+
+## `None` cannot be a resume value
+
+`RunContext.resume_value` is `None` on a first entry, and nodes test for that
+to decide whether to ask or answer. `resume(run_id, None)` therefore looks the
+same as never having been answered, so the node asks again. The `ValueError`
+for a run that is not paused has the same blind spot, since it checks
+`value is not None`.
+
+Fix when: an answer can legitimately be `None`, for example "no preference".
+Use a sentinel default on `resume` and expose `ctx.resuming` as a separate
+flag, so the answer and whether there is one stop being the same field.

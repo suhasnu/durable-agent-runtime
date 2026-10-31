@@ -112,7 +112,8 @@ pytest
 
 The test suite runs against a scripted provider rather than a live API. A suite
 that needs a key and a network is not a test suite, it is a monitoring system,
-and it gets skipped within a month. All 116 tests run offline.
+and it gets skipped within a month. All 126 tests run offline. Five more cover
+the LangGraph port and run when `.[langgraph]` is installed, otherwise they skip.
 
 For a real call against the Anthropic API, set `ANTHROPIC_API_KEY` and run
 `python examples/live.py`.
@@ -138,15 +139,23 @@ For a real call against the Anthropic API, set `ANTHROPIC_API_KEY` and run
   the run fails rather than acting on it.
 - **Budgets checked before a call, not after.** The check reserves what the next
   call may cost, because by the time a call returns, the money is spent.
+- **Human-in-the-loop interrupts.** A node raises `Interrupt` to pause the run,
+  and `resume(run_id, value)` re-enters the same node with the answer, so one
+  node does both the asking and the answering. Pausing writes no checkpoint,
+  because the previous one already points at the node that asked.
+- **A LangGraph port** of the same agent, kept alongside it, with the crash
+  repeated against it and a written [comparison](docs/comparison.md).
 
-## Not done yet
+## Status
 
-Human-in-the-loop interrupts, so a run can pause for approval and resume later.
-Then the same agent ported to LangGraph, kept alongside this one, with a written
-comparison of what the framework gives you and what it costs.
+Done as planned. The runtime, the crash it was built to survive, interrupts,
+and the LangGraph comparison are all in.
 
-Known gaps and deferred decisions, each with the condition that would make it
-worth fixing, are in [docs/roadmap.md](docs/roadmap.md).
+What is left is what running it in production would need: transactions that
+span two writes, a lease so two processes cannot drive one run, schema
+versions on checkpoints, and a thread-safe store. Each is in
+[docs/roadmap.md](docs/roadmap.md) with the condition that would make it worth
+fixing.
 
 ## Why build it
 
